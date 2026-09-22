@@ -32,6 +32,8 @@ make -C prototype/menu-bar build
 
 Если меняли Kotlin-прототип, запустите `gradle classes` из `prototype/kotlin-read/` с JDK 25 и совместимой версией Gradle. В репозитории пока нет Gradle Wrapper; укажите в PR использованные версии. Не утверждайте, что проверили macOS UI, если только собрали код: при возможности проверьте поведение на реальном Mac.
 
+Если меняли Kotlin/Native IOKit пробу, выполните `gradle linkDebugExecutableMacosArm64` из `prototype/kotlin-native-iokit/` на Apple Silicon Mac. Для подтверждения доступа к AppleSMC запустите собранный `iokit-smoke.kexe` вне песочницы и укажите результат в PR.
+
 GitHub Actions сейчас запускает проверку документации. Сборки macOS и аппаратные сценарии в этом workflow ещё не автоматизированы, поэтому их результат надо записывать в PR.
 
 ## Безопасность аппаратных проверок и данных

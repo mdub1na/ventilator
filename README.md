@@ -19,8 +19,9 @@ Ventilator — проект настольного приложения для m
 | Чтение датчиков | C11, IOKit, CoreFoundation, AppleSMC | [Рабочий прототип](prototype/smc-read/README.md), только чтение |
 | Обработка показаний | Kotlin/JVM 2.4.20, JDK 25, Gradle, kotlinx.serialization JSON | [Рабочий прототип](prototype/kotlin-read/README.md), получает данные от нативной утилиты |
 | Строка меню macOS | Swift, AppKit (`NSStatusItem`) | [Рабочий прототип](prototype/menu-bar/README.md) значка и меню |
+| Исследование нативного доступа | Kotlin/Native `macosArm64`, IOKit platform bindings | [Проба](prototype/kotlin-native-iokit/README.md) открывает AppleSMC, но не читает ключи |
 
-Для основного окна запланированы **Compose Multiplatform Desktop** и **Material 3 Expressive**. Возможность использования Kotlin Multiplatform / Kotlin/Native для нативного слоя ещё исследуется; этот выбор не закреплён реализацией. Автозапуск и управление вентиляторами также остаются в плане.
+Для основного окна запланированы **Compose Multiplatform Desktop** и **Material 3 Expressive**. Для первой версии чтения выбран Kotlin/JVM → C; Kotlin/Native не входит в этот путь. Возможность Kotlin/Native для будущего привилегированного помощника ещё исследуется. Автозапуск и управление вентиляторами также остаются в плане.
 
 ## Запуск прототипов на macOS
 
