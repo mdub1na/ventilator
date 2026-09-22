@@ -28,15 +28,26 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
+import ventilator.desktop.login.ui.LoginItemSection
+import ventilator.desktop.login.ui.LoginItemUiAction
+import ventilator.desktop.login.ui.LoginItemUiState
+import ventilator.desktop.login.ui.LoginItemViewModel
 
 @Composable
-fun MonitorScreen(viewModel: MonitorViewModel, statusItemError: String? = null) {
+fun MonitorScreen(viewModel: MonitorViewModel, loginItemViewModel: LoginItemViewModel, statusItemError: String? = null) {
     val state by viewModel.uiState.collectAsState()
-    MonitorContent(state, viewModel::onAction, statusItemError)
+    val loginItemState by loginItemViewModel.uiState.collectAsState()
+    MonitorContent(state, viewModel::onAction, statusItemError, loginItemState, loginItemViewModel::onAction)
 }
 
 @Composable
-fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, statusItemError: String? = null) {
+fun MonitorContent(
+    state: MonitorUiState,
+    onAction: (MonitorUiAction) -> Unit,
+    statusItemError: String? = null,
+    loginItemState: LoginItemUiState = LoginItemUiState(),
+    onLoginItemAction: (LoginItemUiAction) -> Unit = {},
+) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.background, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -91,6 +102,8 @@ fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, s
                     }
                 }
             }
+
+            LoginItemSection(loginItemState, onLoginItemAction)
 
             Text(
                 "Скоростью вентиляторов управляет macOS. Нулевые обороты — показание датчика, а не предупреждение о поломке.",

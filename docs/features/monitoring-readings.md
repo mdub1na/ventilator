@@ -4,7 +4,7 @@ title: Снимок показаний вентиляторов и темпер�
 type: feature
 status: active
 owner: unassigned
-involved_services: [smc-reader-prototype]
+involved_services: [smc-reader-prototype, login-item-bridge]
 client_entries: [monitor-screen]
 api: []
 tags: [monitoring, macos, prototype]
@@ -27,6 +27,7 @@ tags: [monitoring, macos, prototype]
 - Короткий снимок дополнительно содержит `Tg0D` и `TH0a`. Окно выбирает их по точному ключу и показывает «—», если значение недоступно или ключ отсутствует; другой датчик не подставляется. Полный список температур доступен только через исследовательскую команду `smc-read --temperatures-json`, раздела диагностики в окне нет.
 - Kotlin опрашивает короткий снимок каждые 2 секунды независимо от видимости окна. Окно удерживает последнее достоверное значение при ошибке и показывает сообщение с возможностью ручной повторной попытки; значок при ошибке показывает неизвестное состояние, не старые RPM.
 - `TrayReading` передаёт AppKit уровень, `TCMz` и оба фактических RPM; нуль и отсутствие значения различаются в локальном протоколе. AppKit не пересчитывает шкалу и не читает SMC. Пункт «Выход» завершает оба процесса, закрытие окна лишь скрывает его.
+- Настройка «Запускать при входе в macOS» читает фактический статус `SMAppService.mainAppService`, а не локальный Boolean. `requiresApproval` оставляет переключатель выключенным и предлагает открыть системные настройки; `notFound` до первой регистрации допускает включение. При обычном запуске окно открывается, при запуске как объект входа остаётся скрытым. Регистрация вызывается из основного JVM-процесса через JNI, без отдельного privileged helper.
 
 ## 4. Code anchors
 
@@ -41,6 +42,8 @@ tags: [monitoring, macos, prototype]
 | Репозиторий и преобразование в состояние окна | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/data/SmcMonitorRepository.kt`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui/MonitorUiState.kt` |
 | Опрос и действия окна | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui/MonitorViewModel.kt` |
 | Композиция экрана | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui/MonitorScreen.kt` |
+| Автозапуск macOS | `prototype/login-item/LoginItemBridge.m`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/login/data/NativeLoginItemRepository.kt`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/login/ui/LoginItemViewModel.kt` |
+| Проверка статусов автозапуска | `prototype/desktop-app/src/test/kotlin/ventilator/desktop/login/LoginItemTest.kt` |
 | Проверка состояний | `prototype/desktop-app/src/test/kotlin/ventilator/desktop/monitoring/MonitorUiTest.kt` |
 
 ## 5. Scenarios (BDD / test cases)
@@ -95,9 +98,22 @@ tags: [monitoring, macos, prototype]
 * **Automated:** `prototype/desktop-app/src/test/kotlin/ventilator/desktop/monitoring/MonitorUiTest.kt` — опрос без подписчика экрана.
 * **Manual:** пользователь проверил в локальном `.app` на `Mac15,7` обновление значка при скрытом окне, оба вида щелчка, пункты открытия/скрытия и «Выход»; значок остался читаемым при тесной строке меню.
 
+### Scenario: Автозапуск и системное разрешение
+* **Given:** локальный `.app` запущен вручную и автозапуск выключен.
+* **When:** пользователь включает настройку, затем отзывает и возвращает разрешение в macOS, затем выключает настройку.
+* **Then:** статус последовательно показывает `enabled`, `requiresApproval`, `enabled`, `notRegistered`; при `requiresApproval` UI не показывает фиктивно включённый переключатель и даёт открыть системные настройки.
+* **Automated:** `prototype/desktop-app/src/test/kotlin/ventilator/desktop/login/LoginItemTest.kt` — отображение статуса и восстановление после ошибки переключения.
+* **Manual:** на `Mac15,7` приложение появилось в системном списке объектов входа при включении и исчезло при выключении; отзыв разрешения переключил UI в состояние запроса разрешения.
+
+### Scenario: Следующий вход пользователя
+* **Given:** автозапуск разрешён в macOS и приложение завершено до выхода из учётной записи.
+* **When:** пользователь входит в macOS снова.
+* **Then:** Ventilator запускается только со значком в строке меню; после отключения настройки новый вход не запускает приложение. Ручной запуск показывает окно.
+* **Manual pending:** повторный вход ещё не проверен на `Mac15,7`.
+
 ## 6. Out of scope
 
-- Подписанный дистрибутив `.app`, автозапуск при входе и управление скоростью вентиляторов.
+- Подписанный дистрибутив `.app` и управление скоростью вентиляторов.
 - Интерпретация физического расположения вентиляторов и температурных ключей для других моделей Mac.
 
 ## 7. Quirks

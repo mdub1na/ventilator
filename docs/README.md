@@ -1,6 +1,6 @@
 # Документация Ventilator
 
-Репозиторий находится на стадии исследования и локальных прототипов, без законченного приложения. Слой [исследования](research/research-architecture.md) описывает проверенные факты и решения, а [BACKLOG.md](../BACKLOG.md) — последовательность проверок. [Функция показаний](features/monitoring-readings.md) и [экран мониторинга](screens/monitor-screen.md) документируют реализованную Kotlin-модель и самостоятельное Compose Desktop окно. Документы о контрактах и других модулях появятся вместе с соответствующим кодом.
+Репозиторий находится на стадии локального прототипа macOS-приложения. Слой [исследования](research/research-architecture.md) описывает проверенные факты и решения, а [BACKLOG.md](../BACKLOG.md) — последовательность проверок. [Функция показаний](features/monitoring-readings.md), [экран мониторинга](screens/monitor-screen.md) и документы сервисов описывают работающую сборку Ventilator.app и нативные мосты macOS. Документы о контрактах и других модулях появятся вместе с соответствующим кодом.
 
 ## Правила
 
@@ -31,6 +31,7 @@ make report
 
 - [x] [monitor-screen](screens/monitor-screen.md) — окно мониторинга `Mac15,7` и его состояния.
 
-### Services (1)
+### Services (2)
 
 - [x] [smc-reader-prototype](services/smc-reader-prototype.md) — локальное чтение AppleSMC через C-утилиту и Kotlin/JVM процесс.
+- [x] [login-item-bridge](services/login-item-bridge.md) — регистрация автозапуска и чтение его состояния через JNI и ServiceManagement.
