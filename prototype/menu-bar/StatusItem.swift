@@ -45,7 +45,7 @@ private struct Snapshot: Decodable {
     }
 }
 
-private final class StatusItemController: NSObject {
+private final class StatusItemController: NSObject, NSMenuDelegate {
     private let probe: URL
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let menu = NSMenu()
@@ -66,9 +66,16 @@ private final class StatusItemController: NSObject {
         let quitItem = NSMenuItem(title: "Выход", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
+        menu.delegate = self
         statusItem.menu = menu
         render(level: nil, temperature: nil)
-        Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+        let timer = Timer(timeInterval: 2, repeats: true) { [weak self] _ in self?.refresh() }
+        // The default run-loop mode pauses while an AppKit menu tracks pointer events.
+        RunLoop.main.add(timer, forMode: .common)
+        refresh()
+    }
+
+    func menuWillOpen(_ menu: NSMenu) {
         refresh()
     }
 
