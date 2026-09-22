@@ -249,7 +249,7 @@ static void print_status_json(Smc *smc) {
     fputs("],\"cpu_key\":\"TCMz\",\"cpu_temp_c\":", stdout);
     print_json_number(smc, "TCMz", true);
     fputs(",\"selected_temperatures\":[", stdout);
-    const char *selected[] = {"TAOL", "TB0T", "TCMb"};
+    const char *selected[] = {"Tg0D", "TH0a"};
     for (unsigned index = 0; index < sizeof(selected) / sizeof(selected[0]); ++index) {
         if (index) putchar(',');
         printf("{\"key\":\"%s\",\"celsius\":", selected[index]);

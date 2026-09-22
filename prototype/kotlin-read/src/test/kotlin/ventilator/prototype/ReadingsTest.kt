@@ -115,17 +115,18 @@ class ReadingsTest {
         assertEquals(ReadingAvailability.UNAVAILABLE, snapshot.cpuTemperature.availability)
     }
 
-    /** The overview keeps tentative sensor names as raw keys while preserving the observed CPU label. */
+    /** GPU was correlated on this model; SSD still carries only its raw key. */
     @Test
-    fun `selected temperature keys remain unlabelled diagnostics`() {
+    fun `component temperature keys retain their distinct confidence`() {
         val snapshot = parseSnapshot(
             """{"schema":1,"fan_count":0,"fans":[],"cpu_key":"TCMz","cpu_temp_c":70,
-                "selected_temperatures":[{"key":"TAOL","celsius":29.5},{"key":"TB0T","celsius":null}]}""",
+                "selected_temperatures":[{"key":"Tg0D","celsius":49.5},{"key":"TH0a","celsius":null}]}""",
             measuredAt,
         )
 
-        assertEquals(listOf("TAOL", "TB0T"), snapshot.selectedTemperatures.map { it.rawKey })
-        assertEquals(LabelConfidence.RAW_KEY_ONLY, snapshot.selectedTemperatures.first().labelConfidence)
+        assertEquals(listOf("Tg0D", "TH0a"), snapshot.selectedTemperatures.map { it.rawKey })
+        assertEquals(LabelConfidence.OBSERVED_ON_MAC15_7, snapshot.selectedTemperatures.first().labelConfidence)
+        assertEquals(LabelConfidence.RAW_KEY_ONLY, snapshot.selectedTemperatures.last().labelConfidence)
         assertEquals(ReadingAvailability.UNAVAILABLE, snapshot.selectedTemperatures.last().availability)
         assertEquals(LabelConfidence.OBSERVED_ON_MAC15_7, snapshot.cpuTemperature.labelConfidence)
     }
