@@ -11,6 +11,14 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+private fun parseTemperature(element: kotlinx.serialization.json.JsonElement, measuredAt: Instant): TemperatureReading {
+    val entry = element.jsonObject
+    val key = entry.getValue("key").jsonPrimitive.content
+    require(key.length == 4 && key.startsWith('T')) { "Unexpected temperature key" }
+    val celsius = entry.getValue("celsius").jsonPrimitive.doubleOrNull?.takeIf { it.isFinite() && it in 10.0..115.0 }
+    return TemperatureReading(rawKey = key, celsius = celsius, measuredAt = measuredAt)
+}
+
 fun parseSnapshot(json: String, measuredAt: Instant = Instant.now()): StatusSnapshot {
     val root = Json.parseToJsonElement(json).jsonObject
     require(root.getValue("schema").jsonPrimitive.int == 1) { "Unsupported SMC snapshot schema" }
@@ -36,20 +44,39 @@ fun parseSnapshot(json: String, measuredAt: Instant = Instant.now()): StatusSnap
             measuredAt = measuredAt,
             labelConfidence = LabelConfidence.OBSERVED_ON_MAC15_7,
         ),
+        selectedTemperatures = root["selected_temperatures"]?.jsonArray?.map { parseTemperature(it, measuredAt) }
+            ?: emptyList(),
+    )
+}
+
+fun parseDiagnostics(json: String, measuredAt: Instant = Instant.now()): DiagnosticsSnapshot {
+    val root = Json.parseToJsonElement(json).jsonObject
+    require(root.getValue("schema").jsonPrimitive.int == 1) { "Unsupported SMC snapshot schema" }
+    return DiagnosticsSnapshot(
+        temperatures = root.getValue("temperatures").takeUnless { it is kotlinx.serialization.json.JsonNull }
+            ?.jsonArray?.map { parseTemperature(it, measuredAt) },
+        measuredAt = measuredAt,
     )
 }
 
 fun readSnapshot(probe: Path): StatusSnapshot {
-    val process = ProcessBuilder(probe.toString(), "--status-json").start()
+    return parseSnapshot(readProbe(probe, "--status-json", 5))
+}
+
+fun readDiagnostics(probe: Path): DiagnosticsSnapshot =
+    parseDiagnostics(readProbe(probe, "--temperatures-json", 20))
+
+private fun readProbe(probe: Path, argument: String, timeoutSeconds: Long): String {
+    val process = ProcessBuilder(probe.toString(), argument).start()
     try {
-        if (!process.waitFor(5, TimeUnit.SECONDS)) {
+        if (!process.waitFor(timeoutSeconds, TimeUnit.SECONDS)) {
             process.destroyForcibly()
             error("SMC probe timed out")
         }
         val output = process.inputStream.bufferedReader().readText()
         val error = process.errorStream.bufferedReader().readText()
         check(process.exitValue() == 0) { "SMC probe failed: $error" }
-        return parseSnapshot(output)
+        return output
     } finally {
         process.destroy()
     }

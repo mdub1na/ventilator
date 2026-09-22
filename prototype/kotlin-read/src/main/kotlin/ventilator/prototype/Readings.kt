@@ -71,6 +71,7 @@ data class StatusSnapshot(
     val declaredFanCount: Int?,
     val fans: List<FanSnapshot>,
     val cpuTemperature: TemperatureReading,
+    val selectedTemperatures: List<TemperatureReading> = emptyList(),
 ) {
     fun trayLevel(): Int? {
         val count = declaredFanCount ?: return null
@@ -80,3 +81,8 @@ data class StatusSnapshot(
         return levels.filterNotNull().maxOrNull()
     }
 }
+
+data class DiagnosticsSnapshot(
+    val temperatures: List<TemperatureReading>?,
+    val measuredAt: Instant,
+)

@@ -248,6 +248,15 @@ static void print_status_json(Smc *smc) {
     }
     fputs("],\"cpu_key\":\"TCMz\",\"cpu_temp_c\":", stdout);
     print_json_number(smc, "TCMz", true);
+    fputs(",\"selected_temperatures\":[", stdout);
+    const char *selected[] = {"TAOL", "TB0T", "TCMb"};
+    for (unsigned index = 0; index < sizeof(selected) / sizeof(selected[0]); ++index) {
+        if (index) putchar(',');
+        printf("{\"key\":\"%s\",\"celsius\":", selected[index]);
+        print_json_number(smc, selected[index], true);
+        putchar('}');
+    }
+    putchar(']');
     puts("}");
 }
 
@@ -263,6 +272,54 @@ static bool read_key_at(Smc *smc, uint32_t index, char key[5]) {
             (unsigned char)key[character] > 126) return false;
     }
     return true;
+}
+
+static void print_json_key(const char key[5]) {
+    putchar('"');
+    for (unsigned i = 0; i < 4; ++i) {
+        if (key[i] == '"' || key[i] == '\\') putchar('\\');
+        putchar(key[i]);
+    }
+    putchar('"');
+}
+
+static void print_temperatures_json(Smc *smc) {
+    SmcValue value = {0};
+    fputs("{\"schema\":1,\"temperatures\":", stdout);
+    if (!read_key(smc, "#KEY", &value) || value.size < 4) {
+        puts("null}");
+        return;
+    }
+    uint32_t count = big32(value.bytes);
+    if (count == 0 || count > MAX_SMC_KEYS) count = little32(value.bytes);
+    if (count == 0 || count > MAX_SMC_KEYS) {
+        puts("null}");
+        return;
+    }
+    putchar('[');
+    bool first = true;
+    for (uint32_t index = 0; index < count; ++index) {
+        char key[5];
+        if (!read_key_at(smc, index, key) || key[0] != 'T') continue;
+        if (!first) putchar(',');
+        first = false;
+        fputs("{\"key\":", stdout);
+        print_json_key(key);
+        fputs(",\"celsius\":", stdout);
+        if (read_key(smc, key, &value) &&
+            (strcmp(value.type, "flt ") == 0 || strcmp(value.type, "sp78") == 0)) {
+            double celsius = 0;
+            if (read_number(&value, &celsius) && celsius >= 10 && celsius <= 115) {
+                printf("%.2f", celsius);
+            } else {
+                fputs("null", stdout);
+            }
+        } else {
+            fputs("null", stdout);
+        }
+        putchar('}');
+    }
+    puts("]}");
 }
 
 static void print_temperatures(Smc *smc, bool show_all) {
@@ -308,8 +365,9 @@ static void print_temperatures(Smc *smc, bool show_all) {
 int main(int argc, char **argv) {
     bool show_all = argc == 2 && strcmp(argv[1], "--all-temperatures") == 0;
     bool status_json = argc == 2 && strcmp(argv[1], "--status-json") == 0;
-    if (argc > 2 || (argc == 2 && !show_all && !status_json)) {
-        fprintf(stderr, "Usage: %s [--all-temperatures|--status-json]\n", argv[0]);
+    bool temperatures_json = argc == 2 && strcmp(argv[1], "--temperatures-json") == 0;
+    if (argc > 2 || (argc == 2 && !show_all && !status_json && !temperatures_json)) {
+        fprintf(stderr, "Usage: %s [--all-temperatures|--status-json|--temperatures-json]\n", argv[0]);
         return EXIT_FAILURE;
     }
     io_service_t service = IOServiceGetMatchingService(
@@ -330,6 +388,7 @@ int main(int argc, char **argv) {
         return EXIT_FAILURE;
     }
     if (status_json) print_status_json(&smc);
+    else if (temperatures_json) print_temperatures_json(&smc);
     else {
         print_fans(&smc);
         print_temperatures(&smc, show_all);
