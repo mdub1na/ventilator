@@ -1,6 +1,6 @@
 # Документация Ventilator
 
-Репозиторий находится на стадии исследования и локальных прототипов, без законченного приложения. Слой [исследования](research/research-architecture.md) описывает проверенные факты и решения, а [BACKLOG.md](../BACKLOG.md) — последовательность проверок. [Функция показаний](features/monitoring-readings.md) и [экран мониторинга](screens/monitor-screen.md) документируют реализованную Kotlin-модель и самостоятельное Compose Desktop окно. Документы о контрактах и других модулях появятся вместе с соответствующим кодом.
+Репозиторий находится на стадии локального прототипа macOS-приложения. Слой [исследования](research/research-architecture.md) описывает проверенные факты и решения, а [BACKLOG.md](../BACKLOG.md) — последовательность проверок. [Функция показаний](features/monitoring-readings.md), [экран мониторинга](screens/monitor-screen.md) и документы сервисов описывают работающую сборку Ventilator.app и нативные мосты macOS. Документы о контрактах и других модулях появятся вместе с соответствующим кодом.
 
 ## Правила
 
@@ -23,14 +23,17 @@ make report
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 
-### Features (1)
+### Features (2)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
+- [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
 
-### Screens / Flows (1)
+### Screens / Flows (2)
 
 - [x] [monitor-screen](screens/monitor-screen.md) — окно мониторинга `Mac15,7` и его состояния.
+- [x] [settings-screen](screens/settings-screen.md) — отдельный экран автозапуска с двумя входами.
 
-### Services (1)
+### Services (2)
 
 - [x] [smc-reader-prototype](services/smc-reader-prototype.md) — локальное чтение AppleSMC через C-утилиту и Kotlin/JVM процесс.
+- [x] [login-item-bridge](services/login-item-bridge.md) — регистрация автозапуска и чтение его состояния через JNI и ServiceManagement.

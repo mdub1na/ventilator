@@ -24,6 +24,10 @@ private final class StatusItemBridge: NSObject, NSMenuDelegate {
         menu.addItem(.separator())
         windowItem.target = self
         menu.addItem(windowItem)
+        let settingsItem = NSMenuItem(title: "Настройки", action: #selector(showSettings), keyEquivalent: "")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
+        menu.addItem(.separator())
         let quitItem = NSMenuItem(title: "Выход", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -82,6 +86,11 @@ private final class StatusItemBridge: NSObject, NSMenuDelegate {
 
     @objc private func quit() {
         print("quit")
+        fflush(stdout)
+    }
+
+    @objc private func showSettings() {
+        print("settings")
         fflush(stdout)
     }
 }

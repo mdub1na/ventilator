@@ -17,6 +17,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
 import androidx.compose.material3.ElevatedCard
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -26,17 +27,24 @@ import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MonitorScreen(viewModel: MonitorViewModel, statusItemError: String? = null) {
+fun MonitorScreen(viewModel: MonitorViewModel, onOpenSettings: () -> Unit, statusItemError: String? = null) {
     val state by viewModel.uiState.collectAsState()
-    MonitorContent(state, viewModel::onAction, statusItemError)
+    MonitorContent(state, viewModel::onAction, onOpenSettings, statusItemError)
 }
 
 @Composable
-fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, statusItemError: String? = null) {
+fun MonitorContent(
+    state: MonitorUiState,
+    onAction: (MonitorUiAction) -> Unit,
+    onOpenSettings: () -> Unit = {},
+    statusItemError: String? = null,
+) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.background, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -49,8 +57,13 @@ fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, s
                     Text("Мониторинг системы", style = MaterialTheme.typography.headlineLarge, fontWeight = FontWeight.Bold)
                     Text("Локальные показания AppleSMC · только чтение", style = MaterialTheme.typography.bodyMedium, color = colors.onSurfaceVariant)
                 }
-                Button(onClick = { onAction(MonitorUiAction.Refresh) }, enabled = !state.refreshing) {
-                    Text(if (state.refreshing) "Обновляем…" else "Обновить")
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Button(onClick = { onAction(MonitorUiAction.Refresh) }, enabled = !state.refreshing) {
+                        Text(if (state.refreshing) "Обновляем…" else "Обновить")
+                    }
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.semantics { contentDescription = "Настройки" }) {
+                        Text("⚙", style = MaterialTheme.typography.headlineMedium, color = colors.onSurface)
+                    }
                 }
             }
 

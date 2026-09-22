@@ -25,6 +25,14 @@ val bundleStatusItem = tasks.register<Copy>("bundleStatusItem") {
     into(nativeResources.map { it.dir("macos-arm64") })
     filePermissions { unix("755") }
 }
+val buildLoginItem = tasks.register<Exec>("buildLoginItem") {
+    commandLine("make", "-C", "../login-item", "build")
+}
+val bundleLoginItem = tasks.register<Copy>("bundleLoginItem") {
+    dependsOn(buildLoginItem)
+    from(file("../login-item/liblogin-item.dylib"))
+    into(nativeResources.map { it.dir("macos-arm64") })
+}
 
 kotlin {
     jvmToolchain(25)
@@ -57,7 +65,7 @@ tasks.test {
 }
 
 tasks.matching { it.name == "prepareAppResources" }.configureEach {
-    dependsOn(bundleSmcReader, bundleStatusItem)
+    dependsOn(bundleSmcReader, bundleStatusItem, bundleLoginItem)
 }
 
 tasks.matching { it.name == "run" }.configureEach {
@@ -68,7 +76,10 @@ tasks.matching { it.name == "createDistributable" }.configureEach {
     val packagedApp = layout.buildDirectory.dir("compose/binaries/main/app/Ventilator.app")
     val packagedReader = packagedApp.map { it.file("Contents/app/resources/smc-read") }
     val packagedStatusItem = packagedApp.map { it.file("Contents/app/resources/status-item-bridge") }
-    outputs.upToDateWhen { packagedReader.get().asFile.canExecute() && packagedStatusItem.get().asFile.canExecute() }
+    val packagedLoginItem = packagedApp.map { it.file("Contents/app/resources/liblogin-item.dylib") }
+    outputs.upToDateWhen {
+        packagedReader.get().asFile.canExecute() && packagedStatusItem.get().asFile.canExecute() && packagedLoginItem.get().asFile.isFile
+    }
     // jpackage requires an empty destination when rebuilding a local app image.
     doFirst { delete(packagedApp) }
     doLast {
@@ -76,5 +87,6 @@ tasks.matching { it.name == "createDistributable" }.configureEach {
         check(reader.setExecutable(true, false)) { "Bundled SMC reader is not executable" }
         val statusItem = packagedStatusItem.get().asFile
         check(statusItem.setExecutable(true, false)) { "Bundled status item is not executable" }
+        check(packagedLoginItem.get().asFile.isFile) { "Bundled login item bridge is missing" }
     }
 }
