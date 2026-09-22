@@ -36,13 +36,13 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 
 @Composable
-fun MonitorScreen(viewModel: MonitorViewModel) {
+fun MonitorScreen(viewModel: MonitorViewModel, statusItemError: String? = null) {
     val state by viewModel.uiState.collectAsState()
-    MonitorContent(state, viewModel::onAction)
+    MonitorContent(state, viewModel::onAction, statusItemError)
 }
 
 @Composable
-fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit) {
+fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, statusItemError: String? = null) {
     val colors = MaterialTheme.colorScheme
     Surface(color = colors.background, modifier = Modifier.fillMaxSize()) {
         Column(
@@ -61,6 +61,11 @@ fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit) {
             }
 
             state.error?.let { message ->
+                Surface(color = colors.errorContainer, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
+                    Text(message, color = colors.onErrorContainer, modifier = Modifier.padding(18.dp))
+                }
+            }
+            statusItemError?.let { message ->
                 Surface(color = colors.errorContainer, shape = RoundedCornerShape(20.dp), modifier = Modifier.fillMaxWidth()) {
                     Text(message, color = colors.onErrorContainer, modifier = Modifier.padding(18.dp))
                 }

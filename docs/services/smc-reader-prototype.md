@@ -29,7 +29,8 @@ HTTP API нет. Локальный контракт — JSON схемы `1` и�
 | `prototype/kotlin-read/src/main/kotlin/ventilator/prototype/Readings.kt` | состояние чтения и расчёт шкалы |
 | `prototype/kotlin-read/src/test/kotlin/ventilator/prototype/ReadingsTest.kt` | граничные значения и отсутствие датчика |
 | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/data/SmcMonitorRepository.kt` | обновление потоков для окна |
-| `prototype/desktop-app/build.gradle.kts` | упаковка reader в локальный `.app` |
+| `prototype/desktop-app/build.gradle.kts` | упаковка reader и AppKit значка в локальный `.app` |
+| `prototype/desktop-app/src/main/kotlin/ventilator/desktop/menubar/MenuBarBridge.kt` | дочерний процесс значка и команды меню |
 
 ## 3. How it is built
 
@@ -44,7 +45,7 @@ HTTP API нет. Локальный контракт — JSON схемы `1` и�
 
 ## 5. Infrastructure and deploy
 
-Ничего не устанавливается в систему. Reader и JVM-процесс могут работать вручную; Compose Gradle сборка также создаёт локальный `.app` с вложенным исполняемым `smc-read` и Java runtime. На `Mac15,7` его запуск и чтение проверены. Подпись, нотарификация, устойчивое распространение и привилегированный helper остаются отдельными этапами.
+Ничего не устанавливается в систему. Reader и JVM-процесс могут работать вручную; Compose Gradle сборка также создаёт локальный `.app` с вложенными исполняемыми `smc-read` и `status-item-bridge` плюс Java runtime. Kotlin/JVM один опрашивает короткий снимок и передаёт его AppKit значку по локальному stdin/stdout; полная диагностика запрашивается отдельно. На `Mac15,7` запуск, чтение и наличие обоих процессов проверены. Подпись, нотарификация, устойчивое распространение и привилегированный helper остаются отдельными этапами.
 
 ## 6. Local setup
 

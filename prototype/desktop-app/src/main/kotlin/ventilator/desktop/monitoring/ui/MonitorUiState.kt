@@ -3,6 +3,7 @@ package ventilator.desktop.monitoring.ui
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
+import ventilator.desktop.menubar.TrayReading
 import ventilator.prototype.DiagnosticsSnapshot
 import ventilator.prototype.FanSnapshot
 import ventilator.prototype.ReadingAvailability
@@ -42,6 +43,7 @@ data class MonitorUiState(
     val refreshing: Boolean = true,
     val error: String? = null,
     val updatedAt: String? = null,
+    val trayReading: TrayReading = TrayReading(),
 )
 
 object MonitorUiMapper {
@@ -75,6 +77,7 @@ object MonitorUiMapper {
             refreshing = refreshing,
             error = error,
             updatedAt = status?.cpuTemperature?.measuredAt?.let(timeFormat::format),
+            trayReading = TrayReading.from(status.takeIf { error == null }),
         )
     }
 

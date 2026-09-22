@@ -22,11 +22,12 @@ source: prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui
 | Screen / Content и превью состояний | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui/MonitorScreen.kt`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui/MonitorPreviews.kt` |
 | Создание репозитория и окна | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/DesktopMain.kt` |
 | Реальный источник снимков | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/data/SmcMonitorRepository.kt` |
+| Управление значком и окном | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/menubar/MenuBarBridge.kt`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/DesktopMain.kt` |
 
 ## 0. Вход и видимость
 
-- **Вход:** самостоятельное Compose Desktop окно `Ventilator · Мониторинг` при запуске локального `.app` или `gradle :run`.
-- **Видимость:** открывается сразу. Закрытие завершает этот процесс и его опрос; связь с отдельным AppKit прототипом строки меню предстоит в M1-03.
+- **Вход:** Compose Desktop окно `Ventilator · Мониторинг` при ручном запуске локального `.app` или `gradle :run`; далее обычный щелчок по единому значку либо пункт «Открыть окно» в его контекстном меню.
+- **Видимость:** открывается сразу. Обычный щелчок по значку переключает видимость окна. Красная кнопка закрытия или пункт «Скрыть окно» скрывают окно; опрос и значок продолжают работать. Нажатие двумя пальцами по значку открывает контекстное меню. Полный выход — отдельный пункт меню.
 - **Стиль:** тёмная цветовая схема, `MaterialExpressiveTheme`, карточки Material 3; пользовательского дизайн-артборда и эталонного сравнения пока нет.
 
 ## 1. Состояния экрана
@@ -43,9 +44,13 @@ source: prototype/desktop-app/src/main/kotlin/ventilator/desktop/monitoring/ui
 
 HTTP API нет. `SmcMonitorRepository` вызывает локальный `smc-read --status-json` и по запросу `--temperatures-json` через Kotlin/JVM `readSnapshot`/`readDiagnostics`. Контракт и таймауты находятся в [документе сервиса](../services/smc-reader-prototype.md). `MonitorViewModel` объединяет снимки и UI-флаги через `combine` и `stateIn`.
 
+`TrayReading` формируется из того же `StatusSnapshot` и передаётся дочернему AppKit-процессу через stdin; команды меню возвращаются по stdout. При ошибке чтения значок показывает недоступные значения, а окно удерживает предыдущий успешный снимок с предупреждением. AppKit не делает собственного опроса SMC.
+
 ## 3. Инициализация
 
 **Входные параметры:** явный путь к `smc-read` первым аргументом, иначе ресурс `.app`, иначе `../smc-read/smc-read` из Gradle проекта. Карту датчиков предполагаем проверенной только на `Mac15,7`.
+
+При инициализации запускается один `status-item-bridge`; упакованный путь берётся из ресурсов `.app`, при `gradle :run` — из `../menu-bar/status-item-bridge`. Если процесс значка завершится, окно показывается с сообщением об ошибке, чтобы приложение оставалось доступным.
 
 | Вызов | Условие | Результат |
 |---|---|---|
@@ -92,4 +97,4 @@ HTTP API нет. `SmcMonitorRepository` вызывает локальный `smc
 
 ## 5. Навигация
 
-Маршрутов и переходов пока нет. Закрытие окна завершает самостоятельное приложение. Открытие/скрытие из совмещённого значка будет добавлено в M1-03, автозапуск при входе — в M1-04.
+Маршрутов внутри окна нет. Красная кнопка или «Скрыть окно» ──▶ скрытое окно при работающем опросе; «Открыть окно» ──▶ видимое окно; обычный щелчок по значку переключает эти два состояния; «Выход» ──▶ завершение Kotlin и дочернего AppKit процесса. Автозапуск при входе — M1-04.

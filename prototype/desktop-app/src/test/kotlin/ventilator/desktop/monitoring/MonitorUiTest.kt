@@ -5,6 +5,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.first
@@ -95,6 +96,22 @@ class MonitorUiTest {
         }
     }
 
+    /** The application owns polling so a hidden window cannot stop updates to the status item. */
+    @Test
+    fun `status polling continues without a screen collector`() = runBlocking {
+        val repository = FakeRepository(snapshot(1350.0, 1460.0))
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+        try {
+            MonitorViewModel(repository, scope)
+            withTimeout(5_000) {
+                while (repository.statusLoads < 2) delay(50)
+            }
+            assertTrue(repository.statusLoads >= 2)
+        } finally {
+            scope.cancel()
+        }
+    }
+
     private fun snapshot(fan0: Double?, fan1: Double?, cpu: Double? = 60.0) = StatusSnapshot(
         declaredFanCount = 2,
         fans = listOf(
@@ -112,8 +129,10 @@ class MonitorUiTest {
         override val diagnostics: StateFlow<DiagnosticsSnapshot?> = diagnosticsFlow
         var fail = false
         var diagnosticsLoads = 0
+        @Volatile var statusLoads = 0
 
         override suspend fun refreshStatus() {
+            statusLoads++
             if (fail) error("SMC unavailable")
             statusFlow.value = initial
         }

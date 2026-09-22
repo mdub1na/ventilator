@@ -16,6 +16,15 @@ val bundleSmcReader = tasks.register<Copy>("bundleSmcReader") {
     into(nativeResources.map { it.dir("macos-arm64") })
     filePermissions { unix("755") }
 }
+val buildStatusItem = tasks.register<Exec>("buildStatusItem") {
+    commandLine("make", "-C", "../menu-bar", "status-item-bridge")
+}
+val bundleStatusItem = tasks.register<Copy>("bundleStatusItem") {
+    dependsOn(buildStatusItem)
+    from(file("../menu-bar/status-item-bridge"))
+    into(nativeResources.map { it.dir("macos-arm64") })
+    filePermissions { unix("755") }
+}
 
 kotlin {
     jvmToolchain(25)
@@ -48,17 +57,24 @@ tasks.test {
 }
 
 tasks.matching { it.name == "prepareAppResources" }.configureEach {
-    dependsOn(bundleSmcReader)
+    dependsOn(bundleSmcReader, bundleStatusItem)
+}
+
+tasks.matching { it.name == "run" }.configureEach {
+    dependsOn(buildSmcReader, buildStatusItem)
 }
 
 tasks.matching { it.name == "createDistributable" }.configureEach {
     val packagedApp = layout.buildDirectory.dir("compose/binaries/main/app/Ventilator.app")
     val packagedReader = packagedApp.map { it.file("Contents/app/resources/smc-read") }
-    outputs.upToDateWhen { packagedReader.get().asFile.canExecute() }
+    val packagedStatusItem = packagedApp.map { it.file("Contents/app/resources/status-item-bridge") }
+    outputs.upToDateWhen { packagedReader.get().asFile.canExecute() && packagedStatusItem.get().asFile.canExecute() }
     // jpackage requires an empty destination when rebuilding a local app image.
     doFirst { delete(packagedApp) }
     doLast {
         val reader = packagedReader.get().asFile
         check(reader.setExecutable(true, false)) { "Bundled SMC reader is not executable" }
+        val statusItem = packagedStatusItem.get().asFile
+        check(statusItem.setExecutable(true, false)) { "Bundled status item is not executable" }
     }
 }

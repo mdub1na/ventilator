@@ -40,7 +40,7 @@ object MonitorPreviews {
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 @Composable
 private fun Fixture(state: MonitorUiState) {
-    MaterialExpressiveTheme { MonitorContent(state) {} }
+    MaterialExpressiveTheme { MonitorContent(state, onAction = {}) }
 }
 
 @Preview
