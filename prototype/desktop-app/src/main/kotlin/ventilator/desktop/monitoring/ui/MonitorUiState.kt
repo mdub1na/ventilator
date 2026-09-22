@@ -56,7 +56,7 @@ object MonitorUiMapper {
     private fun temperatures(status: StatusSnapshot?): List<TemperatureUiItem> = listOf(
         temperatureItem("CPU", "TCMz", "Максимум кристалла", status?.cpuTemperature),
         temperatureItem("GPU", "Tg0D", "Датчик GPU · проверен нагрузкой", status?.selectedTemperatures?.firstOrNull { it.rawKey == "Tg0D" }),
-        temperatureItem("SSD", "TH0a", "Предварительная привязка", status?.selectedTemperatures?.firstOrNull { it.rawKey == "TH0a" }),
+        temperatureItem("SSD", "TH0a", "Датчик SSD · проверен нагрузкой", status?.selectedTemperatures?.firstOrNull { it.rawKey == "TH0a" }),
     )
 
     private fun temperatureItem(component: String, key: String, description: String, reading: TemperatureReading?): TemperatureUiItem =

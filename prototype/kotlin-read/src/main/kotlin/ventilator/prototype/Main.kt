@@ -20,7 +20,11 @@ private fun parseTemperature(element: kotlinx.serialization.json.JsonElement, me
         rawKey = key,
         celsius = celsius,
         measuredAt = measuredAt,
-        labelConfidence = if (key == "Tg0D") LabelConfidence.OBSERVED_ON_MAC15_7 else LabelConfidence.RAW_KEY_ONLY,
+        labelConfidence = if (key == "Tg0D" || key == "TH0a") {
+            LabelConfidence.OBSERVED_ON_MAC15_7
+        } else {
+            LabelConfidence.RAW_KEY_ONLY
+        },
     )
 }
 

@@ -53,7 +53,7 @@ class MonitorUiTest {
         assertEquals(listOf("—", "—", "—"), state.temperatures.map { it.value })
     }
 
-    /** The dashboard uses the observed GPU key and the explicit SSD candidate. */
+    /** The dashboard uses the GPU and SSD keys observed under separate loads on this model. */
     @Test
     fun `component cards map their own raw keys`() {
         val state = MonitorUiMapper.map(snapshot(1350.0, 1460.0), refreshing = false, error = null)

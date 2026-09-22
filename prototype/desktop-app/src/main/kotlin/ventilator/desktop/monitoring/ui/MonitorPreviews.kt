@@ -11,7 +11,7 @@ object MonitorPreviews {
         temperatures = listOf(
             TemperatureUiItem("CPU", "TCMz", "58.6", true, "Максимум кристалла"),
             TemperatureUiItem("GPU", "Tg0D", "49.2", true, "Датчик GPU · проверен нагрузкой"),
-            TemperatureUiItem("SSD", "TH0a", "33.4", true, "Предварительная привязка"),
+            TemperatureUiItem("SSD", "TH0a", "33.4", true, "Датчик SSD · проверен нагрузкой"),
         ),
         fans = listOf(
             FanUiItem(0, "1354", 1, "Вращается", "1350–5349 RPM", "F0Ac"),
