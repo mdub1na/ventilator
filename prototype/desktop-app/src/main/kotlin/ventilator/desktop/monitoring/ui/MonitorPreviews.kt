@@ -4,8 +4,6 @@ import androidx.compose.material3.ExperimentalMaterial3ExpressiveApi
 import androidx.compose.material3.MaterialExpressiveTheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.tooling.preview.Preview
-import ventilator.desktop.login.domain.LoginItemStatus
-import ventilator.desktop.login.ui.LoginItemUiMapper
 
 object MonitorPreviews {
     val running = MonitorUiState(
@@ -39,7 +37,7 @@ object MonitorPreviews {
 @Composable
 private fun Fixture(state: MonitorUiState) {
     MaterialExpressiveTheme {
-        MonitorContent(state, onAction = {}, loginItemState = LoginItemUiMapper.map(LoginItemStatus.DISABLED, false, null))
+        MonitorContent(state, onAction = {})
     }
 }
 

@@ -9,7 +9,20 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 
-enum class MenuCommand { SHOW, HIDE, TOGGLE, QUIT }
+enum class MenuCommand {
+    SHOW, HIDE, TOGGLE, SETTINGS, QUIT;
+
+    companion object {
+        fun fromWire(line: String): MenuCommand? = when (line) {
+            "show" -> SHOW
+            "hide" -> HIDE
+            "toggle" -> TOGGLE
+            "settings" -> SETTINGS
+            "quit" -> QUIT
+            else -> null
+        }
+    }
+}
 
 /** Owns one accessory AppKit process. Only Kotlin reads AppleSMC. */
 class MenuBarBridge(
@@ -34,13 +47,7 @@ class MenuBarBridge(
                 try {
                     child.inputStream.bufferedReader().useLines { lines ->
                         lines.forEach { line ->
-                            val command = when (line) {
-                                "show" -> MenuCommand.SHOW
-                                "hide" -> MenuCommand.HIDE
-                                "toggle" -> MenuCommand.TOGGLE
-                                "quit" -> MenuCommand.QUIT
-                                else -> null
-                            }
+                            val command = MenuCommand.fromWire(line)
                             if (command != null) scope.launch { onCommand(command) }
                         }
                     }

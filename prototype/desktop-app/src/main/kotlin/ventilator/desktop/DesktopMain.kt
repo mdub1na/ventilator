@@ -28,6 +28,10 @@ import ventilator.desktop.menubar.MenuBarBridge
 import ventilator.desktop.menubar.MenuCommand
 import ventilator.desktop.monitoring.ui.MonitorScreen
 import ventilator.desktop.monitoring.ui.MonitorViewModel
+import ventilator.desktop.navigation.DesktopDestination
+import ventilator.desktop.navigation.DesktopNavigation
+import ventilator.desktop.navigation.DesktopNavigationAction
+import ventilator.desktop.settings.ui.SettingsScreen
 
 private val colors = darkColorScheme(
     primary = Color(0xFF9CE7C4),
@@ -55,6 +59,8 @@ fun main(args: Array<String>) {
         val scope = rememberCoroutineScope()
         val viewModel = remember(probe) { MonitorViewModel(SmcMonitorRepository(probe), scope) }
         val loginItemViewModel = remember(loginItemRepository) { LoginItemViewModel(loginItemRepository, scope) }
+        val navigation = remember { DesktopNavigation() }
+        val destination by navigation.destination.collectAsState()
         var windowVisible by remember { mutableStateOf(!loginItemRepository.canDetectLaunch) }
         var openRequest by remember { mutableIntStateOf(0) }
         var statusItemError by remember { mutableStateOf<String?>(null) }
@@ -91,11 +97,17 @@ fun main(args: Array<String>) {
                                 openRequest++
                             }
                         }
+                        MenuCommand.SETTINGS -> {
+                            navigation.onAction(DesktopNavigationAction.OpenSettings)
+                            windowVisible = true
+                            openRequest++
+                        }
                         MenuCommand.QUIT -> exitApplication()
                     }
                 },
                 onLost = { message ->
                     statusItemError = message
+                    navigation.onAction(DesktopNavigationAction.OpenMonitor)
                     windowVisible = true
                 },
             )
@@ -115,7 +127,7 @@ fun main(args: Array<String>) {
 
         Window(
             onCloseRequest = { windowVisible = false },
-            title = "Ventilator · Мониторинг",
+            title = if (destination == DesktopDestination.MONITOR) "Ventilator · Мониторинг" else "Ventilator · Настройки",
             visible = windowVisible,
             state = rememberWindowState(size = DpSize(1040.dp, 860.dp)),
         ) {
@@ -126,7 +138,17 @@ fun main(args: Array<String>) {
                 }
             }
             MaterialExpressiveTheme(colorScheme = colors) {
-                MonitorScreen(viewModel, loginItemViewModel, statusItemError)
+                when (destination) {
+                    DesktopDestination.MONITOR -> MonitorScreen(
+                        viewModel,
+                        onOpenSettings = { navigation.onAction(DesktopNavigationAction.OpenSettings) },
+                        statusItemError = statusItemError,
+                    )
+                    DesktopDestination.SETTINGS -> SettingsScreen(
+                        loginItemViewModel,
+                        onBack = { navigation.onAction(DesktopNavigationAction.OpenMonitor) },
+                    )
+                }
             }
         }
     }

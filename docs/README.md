@@ -23,13 +23,15 @@ make report
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 
-### Features (1)
+### Features (2)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
+- [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
 
-### Screens / Flows (1)
+### Screens / Flows (2)
 
 - [x] [monitor-screen](screens/monitor-screen.md) — окно мониторинга `Mac15,7` и его состояния.
+- [x] [settings-screen](screens/settings-screen.md) — отдельный экран автозапуска с двумя входами.
 
 ### Services (2)
 
