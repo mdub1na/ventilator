@@ -8,16 +8,14 @@ import androidx.compose.ui.tooling.preview.Preview
 object MonitorPreviews {
     val running = MonitorUiState(
         displayState = MonitorDisplayState.RUNNING,
-        cpuValue = "58.6",
-        cpuAvailable = true,
+        temperatures = listOf(
+            TemperatureUiItem("CPU", "TCMz", "58.6", true, "Максимум кристалла"),
+            TemperatureUiItem("GPU", "Tg0D", "49.2", true, "Датчик GPU · проверен нагрузкой"),
+            TemperatureUiItem("SSD", "TH0a", "33.4", true, "Предварительная привязка"),
+        ),
         fans = listOf(
             FanUiItem(0, "1354", 1, "Вращается", "1350–5349 RPM", "F0Ac"),
             FanUiItem(1, "2450", 2, "Вращается", "1458–5777 RPM", "F1Ac"),
-        ),
-        selectedTemperatures = listOf(
-            TemperatureUiItem("TAOL", "29.8", true),
-            TemperatureUiItem("TB0T", "33.8", true),
-            TemperatureUiItem("TCMb", "55.4", true),
         ),
         updatedAt = "12:34:56",
         refreshing = false,
@@ -28,10 +26,8 @@ object MonitorPreviews {
     )
     val unavailable = running.copy(
         displayState = MonitorDisplayState.UNAVAILABLE,
-        cpuValue = "—",
-        cpuAvailable = false,
+        temperatures = running.temperatures.map { it.copy(value = "—", available = false) },
         fans = listOf(running.fans.first(), running.fans.last().copy(rpm = "—", level = null, state = "Показание недоступно")),
-        selectedTemperatures = running.selectedTemperatures.map { it.copy(value = "—", available = false) },
     )
     val error = MonitorUiState(displayState = MonitorDisplayState.ERROR, error = "Не удалось прочитать датчики. Повторите попытку.", refreshing = false)
     val loading = MonitorUiState()
