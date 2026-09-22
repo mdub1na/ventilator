@@ -2,7 +2,7 @@
 id: login-at-startup
 title: Запуск Ventilator при входе в macOS
 type: feature
-status: draft
+status: active
 owner: unassigned
 involved_services: [login-item-bridge]
 client_entries: [settings-screen]

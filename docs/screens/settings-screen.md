@@ -3,7 +3,7 @@ id: settings-screen
 title: Экран настроек Ventilator
 type: client_screen
 platform: [desktop]
-status: draft
+status: active
 entry:
   desktop: "ventilator.desktop.DesktopMainKt: main → SettingsScreen"
 parent_feature: login-at-startup
