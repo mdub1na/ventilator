@@ -11,6 +11,7 @@ private final class StatusItemBridge: NSObject, NSMenuDelegate {
     private var visible = true
     private var level: Int?
     private var temperature: Double?
+    private var contextMonitor: Any?
 
     override init() {
         super.init()
@@ -29,9 +30,19 @@ private final class StatusItemBridge: NSObject, NSMenuDelegate {
         menu.delegate = self
         statusItem.button?.target = self
         statusItem.button?.action = #selector(statusClicked)
-        statusItem.button?.menu = menu
         statusItem.button?.sendAction(on: [.leftMouseUp])
+        contextMonitor = NSEvent.addLocalMonitorForEvents(matching: .rightMouseDown) { [weak self] event in
+            guard let self, let button = self.statusItem.button, let window = button.window,
+                  event.windowNumber == window.windowNumber,
+                  button.bounds.contains(button.convert(event.locationInWindow, from: nil)) else { return event }
+            NSMenu.popUpContextMenu(self.menu, with: event, for: button)
+            return nil
+        }
         StatusArtwork.render(on: statusItem, level: nil, temperature: nil)
+    }
+
+    deinit {
+        if let contextMonitor { NSEvent.removeMonitor(contextMonitor) }
     }
 
     func menuWillOpen(_ menu: NSMenu) {
