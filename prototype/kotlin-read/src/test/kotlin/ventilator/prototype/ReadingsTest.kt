@@ -4,6 +4,7 @@ import java.time.Instant
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertNull
+import kotlin.test.assertFailsWith
 
 class ReadingsTest {
     private val measuredAt = Instant.parse("2026-09-22T12:00:00Z")
@@ -112,5 +113,40 @@ class ReadingsTest {
         assertNull(snapshot.trayLevel())
         assertNull(snapshot.cpuTemperature.celsius)
         assertEquals(ReadingAvailability.UNAVAILABLE, snapshot.cpuTemperature.availability)
+    }
+
+    /** The overview keeps tentative sensor names as raw keys while preserving the observed CPU label. */
+    @Test
+    fun `selected temperature keys remain unlabelled diagnostics`() {
+        val snapshot = parseSnapshot(
+            """{"schema":1,"fan_count":0,"fans":[],"cpu_key":"TCMz","cpu_temp_c":70,
+                "selected_temperatures":[{"key":"TAOL","celsius":29.5},{"key":"TB0T","celsius":null}]}""",
+            measuredAt,
+        )
+
+        assertEquals(listOf("TAOL", "TB0T"), snapshot.selectedTemperatures.map { it.rawKey })
+        assertEquals(LabelConfidence.RAW_KEY_ONLY, snapshot.selectedTemperatures.first().labelConfidence)
+        assertEquals(ReadingAvailability.UNAVAILABLE, snapshot.selectedTemperatures.last().availability)
+        assertEquals(LabelConfidence.OBSERVED_ON_MAC15_7, snapshot.cpuTemperature.labelConfidence)
+    }
+
+    /** A failed enumeration is distinct from an empty list on a fanless or unfamiliar Mac. */
+    @Test
+    fun `diagnostics retain raw keys and distinguish failed enumeration`() {
+        val readings = parseDiagnostics(
+            """{"schema":1,"temperatures":[{"key":"TAOL","celsius":30.2},
+                {"key":"TB0T","celsius":null},{"key":"TCMz","celsius":200}]}""",
+            measuredAt,
+        )
+
+        assertEquals(3, readings.temperatures?.size)
+        assertEquals(30.2, readings.temperatures?.first()?.celsius)
+        assertNull(readings.temperatures?.last()?.celsius)
+        assertEquals(measuredAt, readings.temperatures?.first()?.measuredAt)
+        assertNull(parseDiagnostics("""{"schema":1,"temperatures":null}""", measuredAt).temperatures)
+        assertEquals(emptyList(), parseDiagnostics("""{"schema":1,"temperatures":[]}""", measuredAt).temperatures)
+        assertFailsWith<IllegalArgumentException> {
+            parseDiagnostics("""{"schema":1,"temperatures":[{"key":"F0Ac","celsius":40}]}""", measuredAt)
+        }
     }
 }
