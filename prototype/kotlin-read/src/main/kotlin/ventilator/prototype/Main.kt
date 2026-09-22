@@ -16,7 +16,12 @@ private fun parseTemperature(element: kotlinx.serialization.json.JsonElement, me
     val key = entry.getValue("key").jsonPrimitive.content
     require(key.length == 4 && key.startsWith('T')) { "Unexpected temperature key" }
     val celsius = entry.getValue("celsius").jsonPrimitive.doubleOrNull?.takeIf { it.isFinite() && it in 10.0..115.0 }
-    return TemperatureReading(rawKey = key, celsius = celsius, measuredAt = measuredAt)
+    return TemperatureReading(
+        rawKey = key,
+        celsius = celsius,
+        measuredAt = measuredAt,
+        labelConfidence = if (key == "Tg0D") LabelConfidence.OBSERVED_ON_MAC15_7 else LabelConfidence.RAW_KEY_ONLY,
+    )
 }
 
 fun parseSnapshot(json: String, measuredAt: Instant = Instant.now()): StatusSnapshot {

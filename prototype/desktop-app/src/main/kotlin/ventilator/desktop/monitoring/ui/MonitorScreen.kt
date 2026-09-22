@@ -11,19 +11,13 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Button
-import androidx.compose.material3.ButtonDefaults
-import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ElevatedCard
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -71,27 +65,11 @@ fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, s
                 }
             }
 
-            Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
-                ElevatedCard(modifier = Modifier.weight(1.5f), shape = RoundedCornerShape(32.dp)) {
-                    Column(modifier = Modifier.padding(26.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("ТЕМПЕРАТУРА CPU", style = MaterialTheme.typography.labelMedium, color = colors.primary)
-                        Row(verticalAlignment = Alignment.Bottom) {
-                            Text(state.cpuValue, style = MaterialTheme.typography.displayLarge, fontWeight = FontWeight.Bold)
-                            Text(" °C", style = MaterialTheme.typography.headlineSmall, modifier = Modifier.padding(bottom = 8.dp))
-                        }
-                        Text("Максимум кристалла · TCMz", color = colors.onSurfaceVariant)
-                        Text("Подпись проверена на этой модели", style = MaterialTheme.typography.labelSmall, color = colors.onSurfaceVariant)
-                    }
-                }
-                ElevatedCard(modifier = Modifier.weight(1f), shape = RoundedCornerShape(32.dp)) {
-                    Column(modifier = Modifier.padding(26.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                        Text("СОСТОЯНИЕ", style = MaterialTheme.typography.labelMedium, color = colors.primary)
-                        Text(state.displayState.label(), style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                        Text(
-                            state.updatedAt?.let { "Снимок обработан в $it" } ?: "Ожидаем первое чтение",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = colors.onSurfaceVariant,
-                        )
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                SectionHeading("Температуры", state.updatedAt?.let { "Снимок обработан в $it" } ?: "Ожидаем первое чтение")
+                Row(horizontalArrangement = Arrangement.spacedBy(16.dp), modifier = Modifier.fillMaxWidth()) {
+                    state.temperatures.forEach { temperature ->
+                        TemperatureCard(temperature, Modifier.weight(1f))
                     }
                 }
             }
@@ -114,19 +92,6 @@ fun MonitorContent(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit, s
                 }
             }
 
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-                SectionHeading("Другие температуры", "Сырые имена SMC · назначение компонентов пока не подтверждено")
-                Row(horizontalArrangement = Arrangement.spacedBy(12.dp), modifier = Modifier.fillMaxWidth()) {
-                    state.selectedTemperatures.forEach { temperature ->
-                        TemperatureCard(temperature, Modifier.weight(1f))
-                    }
-                    if (state.selectedTemperatures.isEmpty()) {
-                        Text("Ожидаем показания датчиков", color = colors.onSurfaceVariant)
-                    }
-                }
-            }
-
-            DiagnosticsCard(state, onAction)
             Text(
                 "Скоростью вентиляторов управляет macOS. Нулевые обороты — показание датчика, а не предупреждение о поломке.",
                 style = MaterialTheme.typography.bodySmall,
@@ -183,64 +148,20 @@ private fun FanGauge(level: Int?) {
 
 @Composable
 private fun TemperatureCard(temperature: TemperatureUiItem, modifier: Modifier = Modifier) {
-    ElevatedCard(modifier = modifier, shape = RoundedCornerShape(22.dp)) {
-        Column(modifier = Modifier.padding(18.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text(temperature.key, style = MaterialTheme.typography.labelLarge, color = MaterialTheme.colorScheme.primary)
-            Text(if (temperature.available) "${temperature.value} °C" else "— °C", style = MaterialTheme.typography.titleLarge)
-        }
-    }
-}
-
-@Composable
-private fun DiagnosticsCard(state: MonitorUiState, onAction: (MonitorUiAction) -> Unit) {
     val colors = MaterialTheme.colorScheme
-    ElevatedCard(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(28.dp)) {
-        Column(modifier = Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically, modifier = Modifier.fillMaxWidth()) {
-                Column(modifier = Modifier.weight(1f)) {
-                    Text("Диагностика датчиков", style = MaterialTheme.typography.titleLarge, fontWeight = FontWeight.SemiBold)
-                    Text("Все температурные ключи в исходном виде", color = colors.onSurfaceVariant)
-                }
-                Button(
-                    onClick = { onAction(MonitorUiAction.DiagnosticsToggle) },
-                    colors = ButtonDefaults.buttonColors(containerColor = colors.secondaryContainer, contentColor = colors.onSecondaryContainer),
-                ) { Text(if (state.diagnosticsExpanded) "Скрыть" else "Открыть") }
+    ElevatedCard(modifier = modifier, shape = RoundedCornerShape(28.dp)) {
+        Column(modifier = Modifier.padding(22.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+            Text(temperature.component, style = MaterialTheme.typography.labelLarge, color = colors.primary)
+            Row(verticalAlignment = Alignment.Bottom) {
+                Text(
+                    temperature.value,
+                    style = MaterialTheme.typography.displaySmall,
+                    fontWeight = FontWeight.Bold,
+                    color = if (temperature.available) colors.onSurface else colors.onSurfaceVariant,
+                )
+                Text(" °C", style = MaterialTheme.typography.titleMedium, modifier = Modifier.padding(bottom = 6.dp))
             }
-            if (state.diagnosticsExpanded) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                    OutlinedTextField(
-                        value = state.query,
-                        onValueChange = { onAction(MonitorUiAction.SearchChanged(it)) },
-                        label = { Text("Поиск по SMC-ключу") },
-                        singleLine = true,
-                        modifier = Modifier.weight(1f),
-                    )
-                    Button(onClick = { onAction(MonitorUiAction.DiagnosticsRefresh) }, enabled = !state.diagnosticsRefreshing) {
-                        Text("Обновить список")
-                    }
-                }
-                if (state.diagnosticsRefreshing) CircularProgressIndicator(modifier = Modifier.size(22.dp))
-                state.diagnosticsError?.let { Text(it, color = colors.error) }
-                if (state.diagnosticsUnavailable) Text("Перечисление температурных ключей недоступно", color = colors.onSurfaceVariant)
-                else Text("Найдено ключей: ${state.diagnosticCount}", style = MaterialTheme.typography.labelMedium, color = colors.onSurfaceVariant)
-                LazyColumn(modifier = Modifier.fillMaxWidth().height(228.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    items(state.diagnostics, key = { it.key }) { item ->
-                        Row(modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp), verticalAlignment = Alignment.CenterVertically) {
-                            Text(item.key, modifier = Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
-                            Text(if (item.available) "${item.value} °C" else "—", style = MaterialTheme.typography.bodyMedium)
-                        }
-                    }
-                }
-            }
+            Text("${temperature.description} · ${temperature.key}", style = MaterialTheme.typography.bodySmall, color = colors.onSurfaceVariant)
         }
     }
-}
-
-private fun MonitorDisplayState.label(): String = when (this) {
-    MonitorDisplayState.LOADING -> "Ожидаем данные"
-    MonitorDisplayState.RUNNING -> "Вентиляторы работают"
-    MonitorDisplayState.STOPPED -> "Вентиляторы остановлены"
-    MonitorDisplayState.UNAVAILABLE -> "Часть данных недоступна"
-    MonitorDisplayState.NO_FANS -> "Вентиляторов нет"
-    MonitorDisplayState.ERROR -> "Ошибка чтения"
 }

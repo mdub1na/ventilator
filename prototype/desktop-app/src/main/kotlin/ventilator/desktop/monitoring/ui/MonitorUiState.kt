@@ -4,7 +4,6 @@ import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 import java.util.Locale
 import ventilator.desktop.menubar.TrayReading
-import ventilator.prototype.DiagnosticsSnapshot
 import ventilator.prototype.FanSnapshot
 import ventilator.prototype.ReadingAvailability
 import ventilator.prototype.StatusSnapshot
@@ -22,24 +21,17 @@ data class FanUiItem(
 )
 
 data class TemperatureUiItem(
+    val component: String,
     val key: String,
     val value: String,
     val available: Boolean,
+    val description: String,
 )
 
 data class MonitorUiState(
     val displayState: MonitorDisplayState = MonitorDisplayState.LOADING,
-    val cpuValue: String = "—",
-    val cpuAvailable: Boolean = false,
+    val temperatures: List<TemperatureUiItem> = MonitorUiMapper.emptyTemperatures(),
     val fans: List<FanUiItem> = emptyList(),
-    val selectedTemperatures: List<TemperatureUiItem> = emptyList(),
-    val diagnostics: List<TemperatureUiItem> = emptyList(),
-    val diagnosticCount: Int = 0,
-    val diagnosticsUnavailable: Boolean = false,
-    val diagnosticsExpanded: Boolean = false,
-    val diagnosticsRefreshing: Boolean = false,
-    val diagnosticsError: String? = null,
-    val query: String = "",
     val refreshing: Boolean = true,
     val error: String? = null,
     val updatedAt: String? = null,
@@ -49,37 +41,32 @@ data class MonitorUiState(
 object MonitorUiMapper {
     private val timeFormat = DateTimeFormatter.ofPattern("HH:mm:ss").withZone(ZoneId.systemDefault())
 
-    fun map(
-        status: StatusSnapshot?,
-        diagnostics: DiagnosticsSnapshot?,
-        refreshing: Boolean,
-        error: String?,
-        diagnosticsExpanded: Boolean,
-        diagnosticsRefreshing: Boolean,
-        diagnosticsError: String?,
-        query: String,
-    ): MonitorUiState {
-        val readings = diagnostics?.temperatures.orEmpty()
-        val visibleReadings = readings.filter { it.rawKey.contains(query.trim(), ignoreCase = true) }
-        return MonitorUiState(
-            displayState = displayState(status, error),
-            cpuValue = status?.cpuTemperature?.displayValue() ?: "—",
-            cpuAvailable = status?.cpuTemperature?.availability == ReadingAvailability.AVAILABLE,
-            fans = status?.fans.orEmpty().map(::fanItem),
-            selectedTemperatures = status?.selectedTemperatures.orEmpty().map(::temperatureItem),
-            diagnostics = visibleReadings.map(::temperatureItem),
-            diagnosticCount = readings.size,
-            diagnosticsUnavailable = diagnostics != null && diagnostics.temperatures == null,
-            diagnosticsExpanded = diagnosticsExpanded,
-            diagnosticsRefreshing = diagnosticsRefreshing,
-            diagnosticsError = diagnosticsError,
-            query = query,
-            refreshing = refreshing,
-            error = error,
-            updatedAt = status?.cpuTemperature?.measuredAt?.let(timeFormat::format),
-            trayReading = TrayReading.from(status.takeIf { error == null }),
+    fun emptyTemperatures(): List<TemperatureUiItem> = temperatures(null)
+
+    fun map(status: StatusSnapshot?, refreshing: Boolean, error: String?): MonitorUiState = MonitorUiState(
+        displayState = displayState(status, error),
+        temperatures = temperatures(status),
+        fans = status?.fans.orEmpty().map(::fanItem),
+        refreshing = refreshing,
+        error = error,
+        updatedAt = status?.cpuTemperature?.measuredAt?.let(timeFormat::format),
+        trayReading = TrayReading.from(status.takeIf { error == null }),
+    )
+
+    private fun temperatures(status: StatusSnapshot?): List<TemperatureUiItem> = listOf(
+        temperatureItem("CPU", "TCMz", "Максимум кристалла", status?.cpuTemperature),
+        temperatureItem("GPU", "Tg0D", "Датчик GPU · проверен нагрузкой", status?.selectedTemperatures?.firstOrNull { it.rawKey == "Tg0D" }),
+        temperatureItem("SSD", "TH0a", "Предварительная привязка", status?.selectedTemperatures?.firstOrNull { it.rawKey == "TH0a" }),
+    )
+
+    private fun temperatureItem(component: String, key: String, description: String, reading: TemperatureReading?): TemperatureUiItem =
+        TemperatureUiItem(
+            component = component,
+            key = key,
+            value = if (reading?.rawKey == key && reading.availability == ReadingAvailability.AVAILABLE) numberOneDecimal(reading.celsius) else "—",
+            available = reading?.rawKey == key && reading.availability == ReadingAvailability.AVAILABLE,
+            description = description,
         )
-    }
 
     private fun displayState(status: StatusSnapshot?, error: String?): MonitorDisplayState = when {
         status == null && error != null -> MonitorDisplayState.ERROR
@@ -95,29 +82,23 @@ object MonitorUiMapper {
         val minimum = fan.minRpm
         val maximum = fan.maxRpm
         return FanUiItem(
-        index = fan.index,
-        rpm = if (fan.availability == ReadingAvailability.AVAILABLE) number(fan.actualRpm) else "—",
-        level = fan.level(),
-        state = when {
-            fan.availability == ReadingAvailability.UNAVAILABLE -> "Показание недоступно"
-            fan.actualRpm == 0.0 -> "Остановлен"
-            else -> "Вращается"
-        },
-        range = if (minimum != null && maximum != null && maximum > minimum) {
-            "${number(minimum)}–${number(maximum)} RPM"
-        } else "Диапазон недоступен",
-        key = fan.actualKey,
+            index = fan.index,
+            rpm = if (fan.availability == ReadingAvailability.AVAILABLE) number(fan.actualRpm) else "—",
+            level = fan.level(),
+            state = when {
+                fan.availability == ReadingAvailability.UNAVAILABLE -> "Показание недоступно"
+                fan.actualRpm == 0.0 -> "Остановлен"
+                else -> "Вращается"
+            },
+            range = if (minimum != null && maximum != null && maximum > minimum) {
+                "${number(minimum)}–${number(maximum)} RPM"
+            } else "Диапазон недоступен",
+            key = fan.actualKey,
         )
     }
 
-    private fun temperatureItem(reading: TemperatureReading) = TemperatureUiItem(
-        key = reading.rawKey,
-        value = reading.displayValue(),
-        available = reading.availability == ReadingAvailability.AVAILABLE,
-    )
-
-    private fun TemperatureReading.displayValue(): String =
-        if (availability == ReadingAvailability.AVAILABLE) String.format(Locale.US, "%.1f", celsius) else "—"
+    private fun numberOneDecimal(value: Double?): String =
+        if (value != null && value.isFinite()) String.format(Locale.US, "%.1f", value) else "—"
 
     private fun number(value: Double?): String =
         if (value != null && value.isFinite()) String.format(Locale.US, "%.0f", value) else "—"

@@ -92,7 +92,7 @@ fun main(args: Array<String>) = application {
         onCloseRequest = { windowVisible = false },
         title = "Ventilator · Мониторинг",
         visible = windowVisible,
-        state = rememberWindowState(size = DpSize(1040.dp, 780.dp)),
+        state = rememberWindowState(size = DpSize(1040.dp, 650.dp)),
     ) {
         LaunchedEffect(windowVisible, openRequest) {
             if (windowVisible) {
