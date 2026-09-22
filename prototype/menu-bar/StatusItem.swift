@@ -16,10 +16,10 @@ private struct Fan: Decodable {
     }
 
     var level: Int? {
-        guard let actualRpm, let minRpm, let maxRpm,
-              actualRpm.isFinite, minRpm.isFinite, maxRpm.isFinite,
-              actualRpm >= 0, minRpm >= 0, maxRpm > minRpm else { return nil }
+        guard let actualRpm, actualRpm.isFinite, actualRpm >= 0 else { return nil }
         if actualRpm == 0 { return 0 }
+        guard let minRpm, let maxRpm, minRpm.isFinite, maxRpm.isFinite,
+              minRpm >= 0, maxRpm > minRpm else { return nil }
         let fraction = min(1, max(0, (actualRpm - minRpm) / (maxRpm - minRpm)))
         return min(5, 1 + Int(floor(5 * fraction)))
     }
