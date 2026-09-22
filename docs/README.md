@@ -23,10 +23,11 @@ make report
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 
-### Features (2)
+### Features (3)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
+- [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — принятый протокол первой ограниченной записи; инструмент и аппаратная проба ещё не выполнены.
 
 ### Screens / Flows (2)
 
