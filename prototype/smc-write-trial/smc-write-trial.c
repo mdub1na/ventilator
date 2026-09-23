@@ -665,6 +665,15 @@ static int run_trial(Smc *smc, const char *program, bool apply) {
         return EXIT_FAILURE;
     }
 
+    // Confirmation can take arbitrarily long. Recheck the full safety window and
+    // calculate targets from its last sample immediately before the first write.
+    puts("confirmation accepted; repeating preflight before any SMC write");
+    if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline)) {
+        fputs("post-confirmation preflight failed; no SMC writes were attempted\n", stderr);
+        return EXIT_FAILURE;
+    }
+    print_plan("trial-final", model, os_version, &baseline, &plan);
+
     double baseline_rpm[TRIAL_FAN_COUNT] = {0};
     for (unsigned index = 0; index < TRIAL_FAN_COUNT; ++index) {
         baseline_rpm[index] = preflight.fans[index].actual_rpm;
