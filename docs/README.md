@@ -27,14 +27,15 @@ make report
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
-- [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — принятый протокол первой ограниченной записи; инструмент и аппаратная проба ещё не выполнены.
+- [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — протокол, проверенный dry-run и ограниченный инструмент; аппаратная запись ещё не выполнена.
 
 ### Screens / Flows (2)
 
 - [x] [monitor-screen](screens/monitor-screen.md) — окно мониторинга `Mac15,7` и его состояния.
 - [x] [settings-screen](screens/settings-screen.md) — отдельный экран автозапуска с двумя входами.
 
-### Services (2)
+### Services (3)
 
 - [x] [smc-reader-prototype](services/smc-reader-prototype.md) — локальное чтение AppleSMC через C-утилиту и Kotlin/JVM процесс.
 - [x] [login-item-bridge](services/login-item-bridge.md) — регистрация автозапуска и чтение его состояния через JNI и ServiceManagement.
+- [ ] [smc-write-trial](services/smc-write-trial.md) — отдельный direct-only инструмент M2-01; сборка и dry-run проверены, hardware trial ещё не выполнен.

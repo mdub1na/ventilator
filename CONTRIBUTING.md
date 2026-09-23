@@ -29,7 +29,10 @@ make check
 make -C prototype/smc-read build
 make -C prototype/menu-bar build
 make -C prototype/login-item build
+make -C prototype/smc-write-trial clean build test
 ```
+
+Сборка и тесты `smc-write-trial` не требуют записи в SMC. Не запускайте его команды `--apply` как обычную проверку PR; аппаратный опыт имеет отдельный протокол допуска и журнал в `docs/features/manual-fan-control-trial.md`.
 
 Если меняли Kotlin-модель, запустите `gradle test` из `prototype/kotlin-read/`; если меняли окно, выполните `gradle :test` из `prototype/desktop-app/` с JDK 25 и совместимой версией Gradle. Для проверки локального `.app` есть `gradle createDistributable -Pcompose.desktop.packaging.checkJdkVendor=false` (на Homebrew JDK). В репозитории пока нет Gradle Wrapper; укажите в PR использованные версии. Не утверждайте, что проверили macOS UI, если только собрали код: при возможности проверьте поведение на реальном Mac.
 
