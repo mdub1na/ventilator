@@ -27,7 +27,7 @@ static TrialPreflight valid_preflight(void) {
     };
     input.fans[1] = (TrialFanState){
         .actual_rpm = 1600,
-        .target_rpm = 1458,
+        .target_rpm = 0,
         .min_rpm = 1458,
         .max_rpm = 5777,
         .mode = 3,
@@ -71,6 +71,10 @@ static void preflight_rejects_every_allowlist_mismatch(void) {
     input = valid_preflight();
     memcpy(input.fans[0].target_type, "ui16", 5);
     input.fans[0].target_size = 2;
+    assert(!trial_make_plan(&input, &plan, error, sizeof(error)));
+
+    input = valid_preflight();
+    input.fans[0].target_rpm = 1650;
     assert(!trial_make_plan(&input, &plan, error, sizeof(error)));
 
     input = valid_preflight();

@@ -101,9 +101,25 @@ typedef struct {
 } LiveSnapshot;
 
 typedef struct {
+    char key[5];
+    double time;
+    double value;
+    bool ok;
+    bool transport_attempted;
+    kern_return_t kernel_status;
+    uint8_t smc_status;
+} WriteEvent;
+
+typedef struct {
     Smc *smc;
     const LiveSnapshot *known_keys;
     const TrialPlan *allowed_plan;
+    bool buffer_events;
+    WriteEvent writes[64];
+    size_t write_count;
+    bool has_unlock_observation;
+    double unlock_observation_time;
+    TrialObservation unlock_observation;
 } LiveBackend;
 
 static volatile sig_atomic_t interrupted = 0;
@@ -222,18 +238,23 @@ static bool write_key_exact(
     const char expected_type[5],
     uint32_t expected_size,
     const uint8_t *bytes,
-    size_t byte_count) {
+    size_t byte_count,
+    bool report_errors,
+    bool *transport_attempted) {
+    if (transport_attempted != NULL) *transport_attempted = false;
     SmcKeyInfo info = {0};
     char actual_type[5] = {0};
     if (!read_key_info(smc, name, &info, actual_type)) {
-        print_smc_error("key-info", name, smc);
+        if (report_errors) print_smc_error("key-info", name, smc);
         return false;
     }
     if (strncmp(actual_type, expected_type, 4) != 0 ||
         info.size != expected_size || byte_count != expected_size || byte_count > 32) {
-        fprintf(stderr,
-                "write %.4s blocked: expected type %.4s/%u, found %.4s/%u, bytes=%zu\n",
-                name, expected_type, expected_size, actual_type, info.size, byte_count);
+        if (report_errors) {
+            fprintf(stderr,
+                    "write %.4s blocked: expected type %.4s/%u, found %.4s/%u, bytes=%zu\n",
+                    name, expected_type, expected_size, actual_type, info.size, byte_count);
+        }
         return false;
     }
 
@@ -243,8 +264,9 @@ static bool write_key_exact(
     request.key_info.size = info.size;
     request.command = SMC_WRITE_BYTES;
     memcpy(request.bytes, bytes, byte_count);
+    if (transport_attempted != NULL) *transport_attempted = true;
     if (!smc_call(smc, &request, &response)) {
-        print_smc_error("write", name, smc);
+        if (report_errors) print_smc_error("write", name, smc);
         return false;
     }
     return true;
@@ -325,7 +347,8 @@ static void fan_key(unsigned index, const char suffix[3], char output[5]) {
     output[4] = '\0';
 }
 
-static bool read_fan(Smc *smc, unsigned index, FanLive *fan, bool include_metrics) {
+static bool read_fan(
+    Smc *smc, unsigned index, FanLive *fan, bool include_metrics, bool report_errors) {
     char lower_mode[5];
     char upper_mode[5];
     fan_key(index, "md", lower_mode);
@@ -335,7 +358,7 @@ static bool read_fan(Smc *smc, unsigned index, FanLive *fan, bool include_metric
     } else if (read_key(smc, upper_mode, &fan->mode)) {
         memcpy(fan->mode_key, upper_mode, sizeof(fan->mode_key));
     } else {
-        fprintf(stderr, "fan %u has no readable md/Md mode key\n", index);
+        if (report_errors) fprintf(stderr, "fan %u has no readable md/Md mode key\n", index);
         return false;
     }
 
@@ -353,32 +376,36 @@ static bool read_fan(Smc *smc, unsigned index, FanLive *fan, bool include_metric
     return true;
 }
 
-static bool read_snapshot(Smc *smc, LiveSnapshot *snapshot, bool include_metrics) {
+static bool read_snapshot(
+    Smc *smc, LiveSnapshot *snapshot, bool include_metrics, bool report_errors) {
     memset(snapshot, 0, sizeof(*snapshot));
     SmcValue count = {0};
     uint8_t fan_count = 0;
     if (!read_key(smc, "FNum", &count) || !read_ui8_exact(&count, &fan_count)) {
-        fputs("FNum is unavailable or not ui8\n", stderr);
+        if (report_errors) fputs("FNum is unavailable or not ui8\n", stderr);
         return false;
     }
     snapshot->fan_count = fan_count;
     if (fan_count != TRIAL_FAN_COUNT) {
-        fprintf(stderr, "expected two fans, found %u\n", fan_count);
+        if (report_errors) fprintf(stderr, "expected two fans, found %u\n", fan_count);
         return false;
     }
     if (!read_key(smc, "Ftst", &snapshot->ftst)) {
-        fputs("Ftst is unavailable\n", stderr);
+        if (report_errors) fputs("Ftst is unavailable\n", stderr);
         return false;
     }
     for (unsigned index = 0; index < TRIAL_FAN_COUNT; ++index) {
-        if (!read_fan(smc, index, &snapshot->fans[index], include_metrics)) return false;
+        if (!read_fan(smc, index, &snapshot->fans[index], include_metrics,
+                      report_errors)) return false;
     }
     if (include_metrics) {
         for (unsigned index = 0; index < TRIAL_TEMPERATURE_COUNT; ++index) {
             SmcValue value = {0};
             if (!read_key(smc, TEMPERATURE_KEYS[index], &value) ||
                 !read_number(&value, &snapshot->temperatures_c[index])) {
-                fprintf(stderr, "temperature %.4s is unavailable\n", TEMPERATURE_KEYS[index]);
+                if (report_errors) {
+                    fprintf(stderr, "temperature %.4s is unavailable\n", TEMPERATURE_KEYS[index]);
+                }
                 return false;
             }
         }
@@ -401,6 +428,15 @@ static bool copy_fan_state(const FanLive *live, TrialFanState *state) {
     return true;
 }
 
+static bool snapshot_has_zero_targets(const LiveSnapshot *snapshot) {
+    for (unsigned index = 0; index < TRIAL_FAN_COUNT; ++index) {
+        double target = 0;
+        if (!read_number(&snapshot->fans[index].target, &target) ||
+            fabs(target) > 1.0) return false;
+    }
+    return true;
+}
+
 static bool snapshot_is_baseline(const LiveSnapshot *snapshot) {
     uint8_t ftst = 0;
     if (!read_ui8_exact(&snapshot->ftst, &ftst) || ftst != 0) return false;
@@ -408,7 +444,7 @@ static bool snapshot_is_baseline(const LiveSnapshot *snapshot) {
         uint8_t mode = 0;
         if (!read_ui8_exact(&snapshot->fans[index].mode, &mode) || mode != 3) return false;
     }
-    return true;
+    return snapshot_has_zero_targets(snapshot);
 }
 
 static bool collect_preflight(
@@ -424,9 +460,10 @@ static bool collect_preflight(
 
     for (unsigned sample = 0; sample < TRIAL_PREFLIGHT_SAMPLES; ++sample) {
         LiveSnapshot current = {0};
-        if (!read_snapshot(smc, &current, true)) return false;
+        if (!read_snapshot(smc, &current, true, true)) return false;
         if (!snapshot_is_baseline(&current)) {
-            fputs("preflight blocked: modes must be 3 and Ftst must be 0 in every sample\n", stderr);
+            fputs("preflight blocked: modes 3, Ftst 0 and zero targets required in every sample\n",
+                  stderr);
             return false;
         }
         for (unsigned sensor = 0; sensor < TRIAL_TEMPERATURE_COUNT; ++sensor) {
@@ -515,11 +552,71 @@ static bool restore_keys_supported(const LiveSnapshot *snapshot) {
     return true;
 }
 
+static void buffer_write(
+    LiveBackend *backend, const char key[5], double value,
+    bool ok, bool transport_attempted) {
+    if (!backend->buffer_events || backend->write_count >= 64) return;
+    WriteEvent *event = &backend->writes[backend->write_count++];
+    memcpy(event->key, key, sizeof(event->key));
+    event->time = monotonic_seconds();
+    event->value = value;
+    event->ok = ok;
+    event->transport_attempted = transport_attempted;
+    event->kernel_status = backend->smc->kernel_status;
+    event->smc_status = backend->smc->smc_status;
+}
+
+static void print_record(
+    unsigned second, double time, const TrialObservation *observation) {
+    printf("{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
+           "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
+           "\"target\":[%.0f,%.0f],\"temperatures\":[%.2f,%.2f,%.2f]}\n",
+           time, second,
+           observation->mode[0], observation->mode[1], observation->ftst,
+           observation->actual_rpm[0], observation->actual_rpm[1],
+           observation->target_rpm[0], observation->target_rpm[1],
+           observation->temperatures_c[0],
+           observation->temperatures_c[1],
+           observation->temperatures_c[2]);
+}
+
+static void print_buffered_events(const LiveBackend *backend) {
+    bool observation_printed = false;
+    for (size_t index = 0; index < backend->write_count; ++index) {
+        const WriteEvent *event = &backend->writes[index];
+        if (backend->has_unlock_observation && !observation_printed &&
+            backend->unlock_observation_time < event->time) {
+            print_record(0, backend->unlock_observation_time,
+                         &backend->unlock_observation);
+            observation_printed = true;
+        }
+        printf("{\"event\":\"write\",\"time\":%.6f,\"key\":\"%.4s\","
+               "\"value\":%.0f,\"ok\":%s,\"transport_attempted\":%s",
+               event->time, event->key, event->value,
+               event->ok ? "true" : "false",
+               event->transport_attempted ? "true" : "false");
+        if (event->transport_attempted) {
+            printf(",\"kernel\":%u,\"smc\":%u",
+                   (unsigned)event->kernel_status, event->smc_status);
+        }
+        puts("}");
+    }
+    if (backend->has_unlock_observation && !observation_printed) {
+        print_record(0, backend->unlock_observation_time,
+                     &backend->unlock_observation);
+    }
+    fflush(stdout);
+}
+
 static bool backend_write_mode(void *context, unsigned fan, uint8_t mode) {
     LiveBackend *backend = context;
     if (fan >= TRIAL_FAN_COUNT || (mode != 0 && mode != 1)) return false;
     const FanLive *known = &backend->known_keys->fans[fan];
-    return write_key_exact(backend->smc, known->mode_key, "ui8 ", 1, &mode, 1);
+    bool attempted = false;
+    bool ok = write_key_exact(backend->smc, known->mode_key, "ui8 ", 1, &mode, 1,
+                              !backend->buffer_events, &attempted);
+    buffer_write(backend, known->mode_key, mode, ok, attempted);
+    return ok;
 }
 
 static bool backend_write_target(void *context, unsigned fan, double rpm) {
@@ -530,13 +627,30 @@ static bool backend_write_target(void *context, unsigned fan, double rpm) {
     size_t encoded_size = 0;
     if (!trial_encode_rpm(
             known->target.type, known->target.size, rpm, encoded, &encoded_size)) return false;
-    return write_key_exact(
+    bool attempted = false;
+    bool ok = write_key_exact(
         backend->smc,
         known->target_key,
         known->target.type,
         known->target.size,
         encoded,
-        encoded_size);
+        encoded_size,
+        !backend->buffer_events,
+        &attempted);
+    buffer_write(backend, known->target_key, rpm, ok, attempted);
+    return ok;
+}
+
+static bool backend_write_ftst(void *context, uint8_t value) {
+    LiveBackend *backend = context;
+    if (value != 0 && value != 1) return false;
+    if (strncmp(backend->known_keys->ftst.type, "ui8 ", 4) != 0 ||
+        backend->known_keys->ftst.size != 1) return false;
+    bool attempted = false;
+    bool ok = write_key_exact(backend->smc, "Ftst", "ui8 ", 1, &value, 1,
+                              !backend->buffer_events, &attempted);
+    buffer_write(backend, "Ftst", value, ok, attempted);
+    return ok;
 }
 
 static bool backend_read_observation(
@@ -545,7 +659,8 @@ static bool backend_read_observation(
     TrialObservation *output) {
     LiveBackend *backend = context;
     LiveSnapshot current = {0};
-    if (!read_snapshot(backend->smc, &current, include_temperatures)) return false;
+    if (!read_snapshot(backend->smc, &current, include_temperatures,
+                       !backend->buffer_events)) return false;
     if (!read_ui8_exact(&current.ftst, &output->ftst)) return false;
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         const FanLive *known = &backend->known_keys->fans[fan];
@@ -586,15 +701,15 @@ static void backend_record(
     void *context,
     unsigned second,
     const TrialObservation *observation) {
-    (void)context;
-    printf("{\"event\":\"observe\",\"second\":%u,\"actual\":[%.0f,%.0f],"
-           "\"target\":[%.0f,%.0f],\"temperatures\":[%.2f,%.2f,%.2f]}\n",
-           second,
-           observation->actual_rpm[0], observation->actual_rpm[1],
-           observation->target_rpm[0], observation->target_rpm[1],
-           observation->temperatures_c[0],
-           observation->temperatures_c[1],
-           observation->temperatures_c[2]);
+    LiveBackend *backend = context;
+    double time = monotonic_seconds();
+    if (backend->buffer_events) {
+        backend->has_unlock_observation = true;
+        backend->unlock_observation_time = time;
+        backend->unlock_observation = *observation;
+        return;
+    }
+    print_record(second, time, observation);
     fflush(stdout);
 }
 
@@ -603,6 +718,7 @@ static TrialBackend trial_backend(LiveBackend *context) {
         .context = context,
         .write_mode = backend_write_mode,
         .write_target = backend_write_target,
+        .write_ftst = backend_write_ftst,
         .read_observation = backend_read_observation,
         .wait_milliseconds = backend_wait,
         .monotonic_seconds = backend_now,
@@ -625,6 +741,21 @@ static bool prompt_for_direct_trial(const char *program) {
     if (fgets(line, sizeof(line), stdin) == NULL) return false;
     line[strcspn(line, "\r\n")] = '\0';
     return strcmp(line, "APPLY DIRECT TRIAL") == 0;
+}
+
+static bool prompt_for_ftst_check(const char *program) {
+    printf("Prepare this command in a second Terminal before continuing:\n"
+           "sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
+           "Type APPLY FTST CHECK to continue: ", program);
+    fflush(stdout);
+    if (!isatty(STDIN_FILENO)) {
+        fputs("ftst-check apply requires an interactive TTY\n", stderr);
+        return false;
+    }
+    char line[80];
+    if (fgets(line, sizeof(line), stdin) == NULL) return false;
+    line[strcspn(line, "\r\n")] = '\0';
+    return strcmp(line, "APPLY FTST CHECK") == 0;
 }
 
 static bool install_signal_handlers(void) {
@@ -701,7 +832,7 @@ static int run_restore(Smc *smc, bool apply) {
     char os_version[32] = {0};
     if (!exact_environment(model, os_version)) return EXIT_FAILURE;
     LiveSnapshot current = {0};
-    if (!read_snapshot(smc, &current, false)) return EXIT_FAILURE;
+    if (!read_snapshot(smc, &current, false, true)) return EXIT_FAILURE;
 
     uint8_t ftst = 0;
     if (!read_ui8_exact(&current.ftst, &ftst)) {
@@ -736,25 +867,148 @@ static int run_restore(Smc *smc, bool apply) {
     return EXIT_SUCCESS;
 }
 
+static void print_ftst_final(TrialBackend *backend) {
+    TrialObservation final = {0};
+    if (backend->read_observation(backend->context, false, &final)) {
+        printf("{\"event\":\"final\",\"time\":%.6f,\"mode\":[%u,%u],"
+               "\"Ftst\":%u,\"target\":[%.0f,%.0f]}\n",
+               monotonic_seconds(), final.mode[0], final.mode[1], final.ftst,
+               final.target_rpm[0], final.target_rpm[1]);
+        fflush(stdout);
+    }
+}
+
+static int run_ftst_check(Smc *smc, const char *program, bool apply) {
+    char model[32] = {0};
+    char os_version[32] = {0};
+    if (!exact_environment(model, os_version)) return EXIT_FAILURE;
+
+    TrialPreflight preflight = {0};
+    TrialPlan plan = {0};
+    LiveSnapshot baseline = {0};
+    if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
+        !snapshot_has_zero_targets(&baseline)) {
+        fputs("ftst-check blocked: preflight or zero-target baseline failed\n", stderr);
+        return EXIT_FAILURE;
+    }
+    print_plan(apply ? "ftst-check-apply" : "ftst-check-dry-run",
+               model, os_version, &baseline, NULL);
+    if (!apply) {
+        puts("dry-run complete: no SMC writes were attempted");
+        return EXIT_SUCCESS;
+    }
+    if (geteuid() != 0) {
+        fputs("ftst-check --apply requires root\n", stderr);
+        return EXIT_FAILURE;
+    }
+    if (!prompt_for_ftst_check(program)) {
+        fputs("confirmation did not match; no SMC writes were attempted\n", stderr);
+        return EXIT_FAILURE;
+    }
+    if (!install_signal_handlers()) {
+        fputs("cannot install signal handlers; no SMC writes were attempted\n", stderr);
+        return EXIT_FAILURE;
+    }
+
+    puts("confirmation accepted; repeating preflight before any SMC write");
+    if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
+        !snapshot_has_zero_targets(&baseline)) {
+        fputs("post-confirmation preflight failed; no SMC writes were attempted\n", stderr);
+        return EXIT_FAILURE;
+    }
+    print_plan("ftst-check-final", model, os_version, &baseline, NULL);
+
+    LiveBackend live = {.smc = smc, .known_keys = &baseline, .allowed_plan = NULL,
+                        .buffer_events = true};
+    TrialBackend backend = trial_backend(&live);
+    TrialRunStatus status = trial_check_ftst(&backend);
+    if (status == TRIAL_RUN_RESTORE_FAILED) {
+        fputs("CRITICAL: Ftst/system baseline was not verified; run prepared restore-unlock command\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    print_buffered_events(&live);
+    print_ftst_final(&backend);
+    if (status == TRIAL_RUN_BASELINE_REJECTED) {
+        fputs("ftst-check blocked: baseline not verified before write; no SMC writes were attempted\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
+        fputs("ftst-check failed or was interrupted; system baseline verified\n", stderr);
+        return EXIT_FAILURE;
+    }
+    puts("Ftst 0 to 1 to 0 confirmed; fan modes and zero targets stayed at baseline");
+    return EXIT_SUCCESS;
+}
+
+static int run_restore_unlock(Smc *smc, bool apply) {
+    char model[32] = {0};
+    char os_version[32] = {0};
+    if (!exact_environment(model, os_version)) return EXIT_FAILURE;
+    LiveSnapshot current = {0};
+    if (!read_snapshot(smc, &current, false, true) || !restore_keys_supported(&current)) {
+        fputs("restore-unlock blocked: keys are unreadable or unsupported\n", stderr);
+        return EXIT_FAILURE;
+    }
+    uint8_t ftst = 0;
+    if (!read_ui8_exact(&current.ftst, &ftst) || ftst > 1) {
+        fputs("restore-unlock blocked: Ftst is not expected ui8 value 0 or 1\n", stderr);
+        return EXIT_FAILURE;
+    }
+    print_plan(apply ? "restore-unlock-apply" : "restore-unlock-dry-run",
+               model, os_version, &current, NULL);
+    if (!apply) {
+        puts("dry-run complete: restore-unlock would release fan modes/targets if needed, then clear Ftst");
+        return EXIT_SUCCESS;
+    }
+    if (geteuid() != 0) {
+        fputs("restore-unlock --apply requires root\n", stderr);
+        return EXIT_FAILURE;
+    }
+    LiveBackend live = {.smc = smc, .known_keys = &current, .allowed_plan = NULL,
+                        .buffer_events = true};
+    TrialBackend backend = trial_backend(&live);
+    bool verified = trial_restore_unlock(&backend);
+    if (!verified) {
+        fputs("CRITICAL: restore-unlock did not verify system baseline; reboot and read modes\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    print_buffered_events(&live);
+    print_ftst_final(&backend);
+    puts("system mode, zero targets and Ftst=0 verified");
+    return EXIT_SUCCESS;
+}
+
 static void usage(const char *program) {
     fprintf(stderr,
             "Usage:\n"
             "  %s trial --dry-run\n"
             "  %s restore --dry-run\n"
+            "  %s ftst-check --dry-run\n"
+            "  %s restore-unlock --dry-run\n"
             "  sudo %s trial --apply --confirm TRIAL-Mac15,7-27.0\n"
-            "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n",
-            program, program, program, program);
+            "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
+            "  sudo %s ftst-check --apply --confirm FTST-CHECK-Mac15,7-27.0\n"
+            "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n",
+            program, program, program, program, program, program, program, program);
 }
 
 int main(int argc, char **argv) {
     bool trial = argc >= 2 && strcmp(argv[1], "trial") == 0;
     bool restore = argc >= 2 && strcmp(argv[1], "restore") == 0;
+    bool ftst_check = argc >= 2 && strcmp(argv[1], "ftst-check") == 0;
+    bool restore_unlock = argc >= 2 && strcmp(argv[1], "restore-unlock") == 0;
     bool dry_run = argc == 3 && strcmp(argv[2], "--dry-run") == 0;
     bool apply = argc == 5 && strcmp(argv[2], "--apply") == 0 &&
                  strcmp(argv[3], "--confirm") == 0 &&
                  ((trial && strcmp(argv[4], "TRIAL-Mac15,7-27.0") == 0) ||
-                  (restore && strcmp(argv[4], "RESTORE-Mac15,7-27.0") == 0));
-    if ((!trial && !restore) || (!dry_run && !apply)) {
+                  (restore && strcmp(argv[4], "RESTORE-Mac15,7-27.0") == 0) ||
+                  (ftst_check && strcmp(argv[4], "FTST-CHECK-Mac15,7-27.0") == 0) ||
+                  (restore_unlock &&
+                   strcmp(argv[4], "RESTORE-UNLOCK-Mac15,7-27.0") == 0));
+    if ((!trial && !restore && !ftst_check && !restore_unlock) || (!dry_run && !apply)) {
         usage(argv[0]);
         return EXIT_FAILURE;
     }
@@ -763,7 +1017,10 @@ int main(int argc, char **argv) {
     if (!smc_open(&smc)) return EXIT_FAILURE;
     char absolute_program[PATH_MAX] = {0};
     const char *program = realpath(argv[0], absolute_program) != NULL ? absolute_program : argv[0];
-    int result = trial ? run_trial(&smc, program, apply) : run_restore(&smc, apply);
+    int result = trial ? run_trial(&smc, program, apply) :
+                 restore ? run_restore(&smc, apply) :
+                 ftst_check ? run_ftst_check(&smc, program, apply) :
+                 run_restore_unlock(&smc, apply);
     IOServiceClose(smc.connection);
     return result;
 }
