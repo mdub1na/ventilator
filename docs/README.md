@@ -23,11 +23,12 @@ make report
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 
-### Features (3)
+### Features (4)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
-- [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — протокол, проверенный dry-run и ограниченный инструмент; аппаратная запись ещё не выполнена.
+- [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — прямая проба записи отклонена SMC; ручные обороты и возврат из ручного режима не подтверждены.
+- [ ] [ftst-check-trial](features/ftst-check-trial.md) — короткая отдельная проверка `Ftst` подготовлена; запись ещё не выполнена.
 
 ### Screens / Flows (2)
 
@@ -38,4 +39,4 @@ make report
 
 - [x] [smc-reader-prototype](services/smc-reader-prototype.md) — локальное чтение AppleSMC через C-утилиту и Kotlin/JVM процесс.
 - [x] [login-item-bridge](services/login-item-bridge.md) — регистрация автозапуска и чтение его состояния через JNI и ServiceManagement.
-- [ ] [smc-write-trial](services/smc-write-trial.md) — отдельный direct-only инструмент M2-01; сборка и dry-run проверены, hardware trial ещё не выполнен.
+- [ ] [smc-write-trial](services/smc-write-trial.md) — отдельный инструмент M2-01: прямая запись отклонена, короткая проба `Ftst` подготовлена без аппаратной записи.

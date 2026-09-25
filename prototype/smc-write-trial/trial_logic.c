@@ -62,7 +62,7 @@ bool trial_make_plan(
         }
         if (!isfinite(fan->actual_rpm) || !isfinite(fan->target_rpm) ||
             !isfinite(fan->min_rpm) || !isfinite(fan->max_rpm) ||
-            fan->actual_rpm < 0.0 || fan->target_rpm < 0.0 ||
+            fan->actual_rpm < 0.0 || fabs(fan->target_rpm) > 1.0 ||
             fan->min_rpm < 0.0 || fan->min_rpm >= fan->max_rpm) {
             return fail(error, error_size, "a fan RPM value or range is invalid");
         }
