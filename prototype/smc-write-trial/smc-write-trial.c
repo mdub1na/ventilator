@@ -988,11 +988,10 @@ static void usage(const char *program) {
             "  %s restore --dry-run\n"
             "  %s ftst-check --dry-run\n"
             "  %s restore-unlock --dry-run\n"
-            "  sudo %s trial --apply --confirm TRIAL-Mac15,7-27.0\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
-            "  sudo %s ftst-check --apply --confirm FTST-CHECK-Mac15,7-27.0\n"
-            "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n",
-            program, program, program, program, program, program, program, program);
+            "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
+            "Hardware trial --apply commands are suspended after the Ftst incident.\n",
+            program, program, program, program, program, program);
 }
 
 int main(int argc, char **argv) {
@@ -1010,6 +1009,15 @@ int main(int argc, char **argv) {
                    strcmp(argv[4], "RESTORE-UNLOCK-Mac15,7-27.0") == 0));
     if ((!trial && !restore && !ftst_check && !restore_unlock) || (!dry_run && !apply)) {
         usage(argv[0]);
+        return EXIT_FAILURE;
+    }
+
+    // Ftst=1 was accepted on Mac15,7, but the state changed after this tool
+    // reported its original baseline and independent recovery was not verified.
+    // Keep read-only checks and emergency restore commands available.
+    if (apply && (trial || ftst_check)) {
+        fputs("hardware trials suspended after delayed Ftst state change; "
+              "no SMC access attempted\n", stderr);
         return EXIT_FAILURE;
     }
 
