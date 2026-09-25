@@ -11,9 +11,12 @@ make test
 ./smc-write-trial restore --dry-run
 ./smc-write-trial ftst-check --dry-run
 ./smc-write-trial restore-unlock --dry-run
+./smc-write-trial observe-baseline --read-only
 ```
 
 Все команды `--dry-run` только читают SMC. `trial` и `ftst-check` собирают пять снимков за 10 секунд; `trial` печатает рассчитанные цели. `restore` и `restore-unlock` проверяют фиксированный план возврата. Они не требуют `sudo`.
+
+`observe-baseline --read-only` делает 61 чтение за минуту и завершает работу при изменении `Ftst`, режимов или целей, ошибке чтения либо прерывании. Успешный интервал не доказывает безопасность новой записи или надёжное восстановление. Режим описан в [отдельном документе](../../docs/features/baseline-observer.md); на `Mac15,7`/macOS 27.0 он проверен без записи 2026-09-26. В песочнице Codex открытие AppleSMC может потребовать отдельного разрешения среды запуска.
 
 ## Команды с записью
 

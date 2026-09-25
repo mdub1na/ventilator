@@ -1,6 +1,7 @@
 #include "trial_actions.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <string.h>
@@ -273,6 +274,21 @@ static void ftst_check_rejects_hot_reading_before_first_write(void) {
     assert(mock.write_count == 0);
 }
 
+static void baseline_observation_rejects_changed_state(void) {
+    TrialObservation observation = {.mode = {3, 3}, .target_rpm = {0, 0}};
+    assert(trial_observation_is_baseline(&observation));
+    observation.ftst = 1;
+    assert(!trial_observation_is_baseline(&observation));
+    observation.ftst = 0;
+    observation.mode[1] = 0;
+    assert(!trial_observation_is_baseline(&observation));
+    observation.mode[1] = 3;
+    observation.target_rpm[0] = 1350;
+    assert(!trial_observation_is_baseline(&observation));
+    observation.target_rpm[0] = NAN;
+    assert(!trial_observation_is_baseline(&observation));
+}
+
 int main(void) {
     direct_trial_success_requires_rpm_and_system_restore();
     direct_trial_restores_both_fans_after_partial_failure();
@@ -291,6 +307,7 @@ int main(void) {
     ftst_unexpected_manual_mode_releases_fans_first();
     ftst_check_rejects_nonbaseline_before_first_write();
     ftst_check_rejects_hot_reading_before_first_write();
+    baseline_observation_rejects_changed_state();
     puts("trial action tests passed");
     return 0;
 }

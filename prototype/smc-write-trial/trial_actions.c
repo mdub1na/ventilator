@@ -31,8 +31,8 @@ static bool retry_target(TrialBackend *backend, unsigned fan, double rpm) {
     return false;
 }
 
-static bool restored(const TrialObservation *observation) {
-    if (observation->ftst != 0) return false;
+bool trial_observation_is_baseline(const TrialObservation *observation) {
+    if (observation == NULL || observation->ftst != 0) return false;
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if (observation->mode[fan] != 3 ||
             !isfinite(observation->target_rpm[fan]) ||
@@ -75,7 +75,8 @@ bool trial_restore_system(TrialBackend *backend) {
     // A rejected mode write may leave the exact baseline untouched. Read it
     // before recovery so we do not issue more writes to an already safe SMC.
     TrialObservation initial = {0};
-    if (backend->read_observation(backend->context, false, &initial) && restored(&initial)) {
+    if (backend->read_observation(backend->context, false, &initial) &&
+        trial_observation_is_baseline(&initial)) {
         return true;
     }
 
@@ -87,7 +88,7 @@ bool trial_restore_system(TrialBackend *backend) {
     for (unsigned second = 0; second <= RESTORE_VERIFY_SECONDS; ++second) {
         TrialObservation observation = {0};
         if (backend->read_observation(backend->context, false, &observation) &&
-            restored(&observation)) return true;
+            trial_observation_is_baseline(&observation)) return true;
         if (second < RESTORE_VERIFY_SECONDS) {
             backend->wait_milliseconds(backend->context, 1000);
         }
@@ -112,7 +113,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
         }
     }
     if (!read_ok) return false;
-    if (restored(&current)) return true;
+    if (trial_observation_is_baseline(&current)) return true;
     if (current.ftst == 0) return trial_restore_system(backend);
     if (current.ftst != 1) return false;
 
@@ -134,7 +135,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
         if (backend->read_observation(backend->context, false, &after_write) &&
             after_write.ftst == 0) {
             ftst_cleared = true;
-            if (restored(&after_write)) return true;
+            if (trial_observation_is_baseline(&after_write)) return true;
             if (!modes_and_targets_released(&after_write)) {
                 return trial_restore_system(backend);
             }
@@ -148,7 +149,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
     for (unsigned second = 0; second <= RESTORE_VERIFY_SECONDS; ++second) {
         TrialObservation observation = {0};
         if (backend->read_observation(backend->context, false, &observation) &&
-            restored(&observation)) return true;
+            trial_observation_is_baseline(&observation)) return true;
         if (second < RESTORE_VERIFY_SECONDS) {
             backend->wait_milliseconds(backend->context, 1000);
         }
@@ -166,7 +167,7 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
 
     TrialObservation baseline = {0};
     if (!backend->read_observation(backend->context, true, &baseline) ||
-        !restored(&baseline) || !temperatures_safe(&baseline) ||
+        !trial_observation_is_baseline(&baseline) || !temperatures_safe(&baseline) ||
         backend->should_stop(backend->context)) {
         return TRIAL_RUN_BASELINE_REJECTED;
     }
