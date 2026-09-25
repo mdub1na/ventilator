@@ -33,7 +33,9 @@ static bool retry_target(TrialBackend *backend, unsigned fan, double rpm) {
 static bool restored(const TrialObservation *observation) {
     if (observation->ftst != 0) return false;
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
-        if (observation->mode[fan] != 3) return false;
+        if (observation->mode[fan] != 3 ||
+            !isfinite(observation->target_rpm[fan]) ||
+            fabs(observation->target_rpm[fan]) > 1.0) return false;
     }
     return true;
 }
@@ -41,6 +43,13 @@ static bool restored(const TrialObservation *observation) {
 bool trial_restore_system(TrialBackend *backend) {
     if (backend == NULL || backend->write_mode == NULL || backend->write_target == NULL ||
         backend->read_observation == NULL || backend->wait_milliseconds == NULL) return false;
+
+    // A rejected mode write may leave the exact baseline untouched. Read it
+    // before recovery so we do not issue more writes to an already safe SMC.
+    TrialObservation initial = {0};
+    if (backend->read_observation(backend->context, false, &initial) && restored(&initial)) {
+        return true;
+    }
 
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         (void)retry_mode(backend, fan, 0);
@@ -137,5 +146,5 @@ TrialRunStatus trial_execute_direct(
     }
 
     if (!trial_restore_system(backend)) return TRIAL_RUN_RESTORE_FAILED;
-    return control_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_RESTORED;
+    return control_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
 }

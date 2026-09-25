@@ -687,8 +687,9 @@ static int run_trial(Smc *smc, const char *program, bool apply) {
               stderr);
         return EXIT_FAILURE;
     }
-    if (status == TRIAL_RUN_CONTROL_FAILED_RESTORED) {
-        fputs("direct trial failed or was interrupted; system mode was restored\n", stderr);
+    if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
+        fputs("direct trial failed or was interrupted; system mode and zero targets verified\n",
+              stderr);
         return EXIT_FAILURE;
     }
     puts("direct trial succeeded and system mode was restored");
@@ -731,7 +732,7 @@ static int run_restore(Smc *smc, bool apply) {
               stderr);
         return EXIT_FAILURE;
     }
-    puts("system mode restored");
+    puts("system mode and zero targets verified");
     return EXIT_SUCCESS;
 }
 
