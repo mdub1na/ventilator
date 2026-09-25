@@ -10,6 +10,7 @@ typedef struct {
     bool fail_first_manual;
     bool fail_second_manual;
     bool fail_first_target;
+    bool reject_zero_targets;
     bool fail_ftst_enable;
     bool apply_ftst_on_error;
     bool fail_ftst_release;
@@ -54,6 +55,7 @@ static bool mock_write_target(void *context, unsigned fan, double rpm) {
     append_write(mock, event);
     ++mock->write_count;
     if (rpm > 0 && fan == 0 && mock->fail_first_target) return false;
+    if (rpm == 0 && mock->reject_zero_targets) return false;
     mock->targets[fan] = rpm;
     return true;
 }
@@ -238,6 +240,17 @@ static void ftst_is_not_cleared_while_a_fan_remains_manual(void) {
     assert(mock.ftst == 1 && mock.modes[0] == 1);
 }
 
+static void ftst_restore_stops_when_minimum_targets_cannot_be_zeroed(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .targets = {1350, 1458}, .reject_zero_targets = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
+    assert(strstr(mock.writes, "T0=0;") != NULL);
+    assert(strstr(mock.writes, "T1=0;") != NULL);
+    assert(strstr(mock.writes, "Ftst=0;") == NULL);
+    assert(mock.ftst == 1);
+}
+
 static void ftst_unexpected_manual_mode_releases_fans_first(void) {
     MockBackend mock = {.modes = {3, 3}, .unexpected_manual_after_unlock = true};
     TrialBackend backend = backend_for(&mock);
@@ -274,6 +287,7 @@ int main(void) {
     interruption_after_unlock_still_restores_ftst();
     ftst_release_failure_requires_independent_recovery();
     ftst_is_not_cleared_while_a_fan_remains_manual();
+    ftst_restore_stops_when_minimum_targets_cannot_be_zeroed();
     ftst_unexpected_manual_mode_releases_fans_first();
     ftst_check_rejects_nonbaseline_before_first_write();
     ftst_check_rejects_hot_reading_before_first_write();
