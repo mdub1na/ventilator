@@ -438,13 +438,14 @@ static bool snapshot_has_zero_targets(const LiveSnapshot *snapshot) {
 }
 
 static bool snapshot_is_baseline(const LiveSnapshot *snapshot) {
-    uint8_t ftst = 0;
-    if (!read_ui8_exact(&snapshot->ftst, &ftst) || ftst != 0) return false;
+    TrialObservation observation = {0};
+    if (!read_ui8_exact(&snapshot->ftst, &observation.ftst)) return false;
     for (unsigned index = 0; index < TRIAL_FAN_COUNT; ++index) {
-        uint8_t mode = 0;
-        if (!read_ui8_exact(&snapshot->fans[index].mode, &mode) || mode != 3) return false;
+        if (!read_ui8_exact(&snapshot->fans[index].mode, &observation.mode[index]) ||
+            !read_number(&snapshot->fans[index].target,
+                         &observation.target_rpm[index])) return false;
     }
-    return snapshot_has_zero_targets(snapshot);
+    return trial_observation_is_baseline(&observation);
 }
 
 static bool collect_preflight(
@@ -769,6 +770,68 @@ static bool install_signal_handlers(void) {
            sigaction(SIGQUIT, &action, NULL) == 0;
 }
 
+static int run_observe_baseline(Smc *smc) {
+    enum { OBSERVE_BASELINE_SECONDS = 60 };
+    char model[32] = {0};
+    char os_version[32] = {0};
+    if (!exact_environment(model, os_version)) return EXIT_FAILURE;
+    if (!install_signal_handlers()) {
+        fputs("cannot install signal handlers for read-only observer\n", stderr);
+        return EXIT_FAILURE;
+    }
+
+    for (unsigned second = 0; second <= OBSERVE_BASELINE_SECONDS; ++second) {
+        LiveSnapshot snapshot = {0};
+        TrialObservation observation = {0};
+        double time = monotonic_seconds();
+        bool read_ok = time >= 0 && read_snapshot(smc, &snapshot, true, true) &&
+                       read_ui8_exact(&snapshot.ftst, &observation.ftst);
+        for (unsigned fan = 0; read_ok && fan < TRIAL_FAN_COUNT; ++fan) {
+            read_ok = read_ui8_exact(&snapshot.fans[fan].mode, &observation.mode[fan]) &&
+                      read_number(&snapshot.fans[fan].actual, &observation.actual_rpm[fan]) &&
+                      read_number(&snapshot.fans[fan].target, &observation.target_rpm[fan]);
+        }
+        if (!read_ok) {
+            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"read_failed\"}\n", second);
+            fflush(stdout);
+            return EXIT_FAILURE;
+        }
+        if (interrupted) {
+            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"interrupted\"}\n",
+                   second);
+            fflush(stdout);
+            return EXIT_FAILURE;
+        }
+        memcpy(observation.temperatures_c, snapshot.temperatures_c,
+               sizeof(observation.temperatures_c));
+        bool baseline = trial_observation_is_baseline(&observation);
+        printf("{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
+               "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
+               "\"target\":[%.0f,%.0f],\"TCMz\":%.2f,\"Tg0D\":%.2f,\"TH0a\":%.2f,"
+               "\"baseline\":%s}\n",
+               time, second, observation.mode[0], observation.mode[1], observation.ftst,
+               observation.actual_rpm[0], observation.actual_rpm[1],
+               observation.target_rpm[0], observation.target_rpm[1],
+               observation.temperatures_c[0], observation.temperatures_c[1],
+               observation.temperatures_c[2], baseline ? "true" : "false");
+        fflush(stdout);
+        if (!baseline) {
+            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"baseline_changed\"}\n",
+                   second);
+            fflush(stdout);
+            return EXIT_FAILURE;
+        }
+        if (second < OBSERVE_BASELINE_SECONDS && !sleep_milliseconds(1000)) {
+            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"interrupted\"}\n",
+                   second);
+            fflush(stdout);
+            return EXIT_FAILURE;
+        }
+    }
+    puts("{\"event\":\"complete\",\"samples\":61,\"status\":\"stable\"}");
+    return EXIT_SUCCESS;
+}
+
 static int run_trial(Smc *smc, const char *program, bool apply) {
     char model[32] = {0};
     char os_version[32] = {0};
@@ -1005,10 +1068,11 @@ static void usage(const char *program) {
             "  %s restore --dry-run\n"
             "  %s ftst-check --dry-run\n"
             "  %s restore-unlock --dry-run\n"
+            "  %s observe-baseline --read-only\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
             "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
             "Hardware trial --apply commands are suspended after the Ftst incident.\n",
-            program, program, program, program, program, program);
+            program, program, program, program, program, program, program);
 }
 
 int main(int argc, char **argv) {
@@ -1016,7 +1080,9 @@ int main(int argc, char **argv) {
     bool restore = argc >= 2 && strcmp(argv[1], "restore") == 0;
     bool ftst_check = argc >= 2 && strcmp(argv[1], "ftst-check") == 0;
     bool restore_unlock = argc >= 2 && strcmp(argv[1], "restore-unlock") == 0;
+    bool observe_baseline = argc >= 2 && strcmp(argv[1], "observe-baseline") == 0;
     bool dry_run = argc == 3 && strcmp(argv[2], "--dry-run") == 0;
+    bool read_only = argc == 3 && strcmp(argv[2], "--read-only") == 0;
     bool apply = argc == 5 && strcmp(argv[2], "--apply") == 0 &&
                  strcmp(argv[3], "--confirm") == 0 &&
                  ((trial && strcmp(argv[4], "TRIAL-Mac15,7-27.0") == 0) ||
@@ -1024,7 +1090,9 @@ int main(int argc, char **argv) {
                   (ftst_check && strcmp(argv[4], "FTST-CHECK-Mac15,7-27.0") == 0) ||
                   (restore_unlock &&
                    strcmp(argv[4], "RESTORE-UNLOCK-Mac15,7-27.0") == 0));
-    if ((!trial && !restore && !ftst_check && !restore_unlock) || (!dry_run && !apply)) {
+    if (!((observe_baseline && read_only) ||
+          (!observe_baseline && (trial || restore || ftst_check || restore_unlock) &&
+           (dry_run || apply)))) {
         usage(argv[0]);
         return EXIT_FAILURE;
     }
@@ -1042,7 +1110,8 @@ int main(int argc, char **argv) {
     if (!smc_open(&smc)) return EXIT_FAILURE;
     char absolute_program[PATH_MAX] = {0};
     const char *program = realpath(argv[0], absolute_program) != NULL ? absolute_program : argv[0];
-    int result = trial ? run_trial(&smc, program, apply) :
+    int result = observe_baseline ? run_observe_baseline(&smc) :
+                 trial ? run_trial(&smc, program, apply) :
                  restore ? run_restore(&smc, apply) :
                  ftst_check ? run_ftst_check(&smc, program, apply) :
                  run_restore_unlock(&smc, apply);

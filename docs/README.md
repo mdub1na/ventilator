@@ -23,12 +23,13 @@ make report
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 
-### Features (4)
+### Features (5)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
 - [ ] [manual-fan-control-trial](features/manual-fan-control-trial.md) — прямая проба записи отклонена SMC; ручные обороты и возврат из ручного режима не подтверждены.
 - [ ] [ftst-check-trial](features/ftst-check-trial.md) — запись `Ftst` выявила отложенное изменение; восстановление не подтвердилось, новые пробы заблокированы.
+- [x] [baseline-observer](features/baseline-observer.md) — независимое чтение исходного состояния в течение минуты после инцидента `Ftst`; проверено на `Mac15,7`.
 
 ### Screens / Flows (2)
 

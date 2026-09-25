@@ -33,6 +33,8 @@ typedef enum {
     TRIAL_RUN_RESTORE_FAILED,
 } TrialRunStatus;
 
+bool trial_observation_is_baseline(const TrialObservation *observation);
+
 bool trial_restore_system(TrialBackend *backend);
 bool trial_restore_unlock(TrialBackend *backend);
 

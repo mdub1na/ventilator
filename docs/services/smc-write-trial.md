@@ -20,13 +20,14 @@ publishes: [local trial evidence]
 
 ## 2. Local contract
 
-HTTP API нет. CLI распознаёт восемь точных форм; формы `trial --apply` и `ftst-check --apply` сейчас завершаются отказом до открытия SMC:
+HTTP API нет. CLI распознаёт девять точных форм; формы `trial --apply` и `ftst-check --apply` сейчас завершаются отказом до открытия SMC:
 
 ```text
 smc-write-trial trial --dry-run
 smc-write-trial restore --dry-run
 smc-write-trial ftst-check --dry-run
 smc-write-trial restore-unlock --dry-run
+smc-write-trial observe-baseline --read-only
 smc-write-trial trial --apply --confirm TRIAL-Mac15,7-27.0
 smc-write-trial restore --apply --confirm RESTORE-Mac15,7-27.0
 smc-write-trial ftst-check --apply --confirm FTST-CHECK-Mac15,7-27.0
@@ -78,6 +79,8 @@ smc-write-trial restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0
 
 После инцидента добавлена диагностика критических отказов и unit-тест, в котором минимальные цели не удаётся обнулить. Он демонстрирует возможную ветку кода, а не установленную причину аппаратного отказа. Сборка и тесты не выполняют записей SMC; новый вывод восстановления на устройстве не испытывался.
 
+Независимый [наблюдатель исходного состояния](../features/baseline-observer.md) 2026-09-26 без root прочитал 61 снимок за минуту на `Mac15,7`/macOS 27.0. Все показали `Ftst=0`, режимы `[3,3]`, цели `[0,0]`; итог `complete/stable`, код 0. Это проверка команды чтения в покое, не проверка задержки после новой записи.
+
 ## 6. Local setup
 
 ```bash
@@ -86,6 +89,7 @@ prototype/smc-write-trial/smc-write-trial restore --dry-run
 prototype/smc-write-trial/smc-write-trial trial --dry-run
 prototype/smc-write-trial/smc-write-trial restore-unlock --dry-run
 prototype/smc-write-trial/smc-write-trial ftst-check --dry-run
+prototype/smc-write-trial/smc-write-trial observe-baseline --read-only
 ```
 
 Команды `--apply` не относятся к проверке сборки. Новые пробы записи заблокированы; аварийные команды восстановления оставлены доступными. Их исходный порядок допуска описан в [прямом протоколе](../features/manual-fan-control-trial.md) и [протоколе `Ftst`](../features/ftst-check-trial.md).
