@@ -567,45 +567,47 @@ static void buffer_write(
 }
 
 static void print_record(
-    unsigned second, double time, const TrialObservation *observation) {
-    printf("{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
-           "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
-           "\"target\":[%.0f,%.0f],\"temperatures\":[%.2f,%.2f,%.2f]}\n",
-           time, second,
-           observation->mode[0], observation->mode[1], observation->ftst,
-           observation->actual_rpm[0], observation->actual_rpm[1],
-           observation->target_rpm[0], observation->target_rpm[1],
-           observation->temperatures_c[0],
-           observation->temperatures_c[1],
-           observation->temperatures_c[2]);
+    FILE *output, unsigned second, double time, const TrialObservation *observation) {
+    fprintf(output,
+            "{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
+            "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
+            "\"target\":[%.0f,%.0f],\"temperatures\":[%.2f,%.2f,%.2f]}\n",
+            time, second,
+            observation->mode[0], observation->mode[1], observation->ftst,
+            observation->actual_rpm[0], observation->actual_rpm[1],
+            observation->target_rpm[0], observation->target_rpm[1],
+            observation->temperatures_c[0],
+            observation->temperatures_c[1],
+            observation->temperatures_c[2]);
 }
 
-static void print_buffered_events(const LiveBackend *backend) {
+static void print_buffered_events(const LiveBackend *backend, FILE *output) {
     bool observation_printed = false;
     for (size_t index = 0; index < backend->write_count; ++index) {
         const WriteEvent *event = &backend->writes[index];
         if (backend->has_unlock_observation && !observation_printed &&
             backend->unlock_observation_time < event->time) {
-            print_record(0, backend->unlock_observation_time,
+            print_record(output, 0, backend->unlock_observation_time,
                          &backend->unlock_observation);
             observation_printed = true;
         }
-        printf("{\"event\":\"write\",\"time\":%.6f,\"key\":\"%.4s\","
-               "\"value\":%.0f,\"ok\":%s,\"transport_attempted\":%s",
-               event->time, event->key, event->value,
-               event->ok ? "true" : "false",
-               event->transport_attempted ? "true" : "false");
+        fprintf(output,
+                "{\"event\":\"write\",\"time\":%.6f,\"key\":\"%.4s\","
+                "\"value\":%.0f,\"ok\":%s,\"transport_attempted\":%s",
+                event->time, event->key, event->value,
+                event->ok ? "true" : "false",
+                event->transport_attempted ? "true" : "false");
         if (event->transport_attempted) {
-            printf(",\"kernel\":%u,\"smc\":%u",
-                   (unsigned)event->kernel_status, event->smc_status);
+            fprintf(output, ",\"kernel\":%u,\"smc\":%u",
+                    (unsigned)event->kernel_status, event->smc_status);
         }
-        puts("}");
+        fputs("}\n", output);
     }
     if (backend->has_unlock_observation && !observation_printed) {
-        print_record(0, backend->unlock_observation_time,
+        print_record(output, 0, backend->unlock_observation_time,
                      &backend->unlock_observation);
     }
-    fflush(stdout);
+    fflush(output);
 }
 
 static bool backend_write_mode(void *context, unsigned fan, uint8_t mode) {
@@ -709,7 +711,7 @@ static void backend_record(
         backend->unlock_observation = *observation;
         return;
     }
-    print_record(second, time, observation);
+    print_record(stdout, second, time, observation);
     fflush(stdout);
 }
 
@@ -867,15 +869,22 @@ static int run_restore(Smc *smc, bool apply) {
     return EXIT_SUCCESS;
 }
 
-static void print_ftst_final(TrialBackend *backend) {
-    TrialObservation final = {0};
-    if (backend->read_observation(backend->context, false, &final)) {
-        printf("{\"event\":\"final\",\"time\":%.6f,\"mode\":[%u,%u],"
-               "\"Ftst\":%u,\"target\":[%.0f,%.0f]}\n",
-               monotonic_seconds(), final.mode[0], final.mode[1], final.ftst,
-               final.target_rpm[0], final.target_rpm[1]);
-        fflush(stdout);
+static void print_ftst_readback(
+    TrialBackend *backend, const char *event, FILE *output) {
+    TrialObservation observation = {0};
+    bool read_ok = backend->read_observation(backend->context, false, &observation);
+    double time = monotonic_seconds();
+    if (read_ok) {
+        fprintf(output,
+                "{\"event\":\"%s\",\"time\":%.6f,\"read_ok\":true,"
+                "\"mode\":[%u,%u],\"Ftst\":%u,\"target\":[%.0f,%.0f]}\n",
+                event, time, observation.mode[0], observation.mode[1], observation.ftst,
+                observation.target_rpm[0], observation.target_rpm[1]);
+    } else {
+        fprintf(output, "{\"event\":\"%s\",\"time\":%.6f,\"read_ok\":false}\n",
+                event, time);
     }
+    fflush(output);
 }
 
 static int run_ftst_check(Smc *smc, const char *program, bool apply) {
@@ -923,12 +932,16 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     TrialBackend backend = trial_backend(&live);
     TrialRunStatus status = trial_check_ftst(&backend);
     if (status == TRIAL_RUN_RESTORE_FAILED) {
+        fflush(stdout);
         fputs("CRITICAL: Ftst/system baseline was not verified; run prepared restore-unlock command\n",
               stderr);
+        fflush(stderr);
+        print_buffered_events(&live, stderr);
+        print_ftst_readback(&backend, "post_failure", stderr);
         return EXIT_FAILURE;
     }
-    print_buffered_events(&live);
-    print_ftst_final(&backend);
+    print_buffered_events(&live, stdout);
+    print_ftst_readback(&backend, "final", stdout);
     if (status == TRIAL_RUN_BASELINE_REJECTED) {
         fputs("ftst-check blocked: baseline not verified before write; no SMC writes were attempted\n",
               stderr);
@@ -971,12 +984,16 @@ static int run_restore_unlock(Smc *smc, bool apply) {
     TrialBackend backend = trial_backend(&live);
     bool verified = trial_restore_unlock(&backend);
     if (!verified) {
+        fflush(stdout);
         fputs("CRITICAL: restore-unlock did not verify system baseline; reboot and read modes\n",
               stderr);
+        fflush(stderr);
+        print_buffered_events(&live, stderr);
+        print_ftst_readback(&backend, "post_failure", stderr);
         return EXIT_FAILURE;
     }
-    print_buffered_events(&live);
-    print_ftst_final(&backend);
+    print_buffered_events(&live, stdout);
+    print_ftst_readback(&backend, "final", stdout);
     puts("system mode, zero targets and Ftst=0 verified");
     return EXIT_SUCCESS;
 }
