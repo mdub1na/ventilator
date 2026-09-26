@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#include <ctype.h>
 #include <unistd.h>
 
 @interface StatusProvider : NSObject <HelperStatusXPC>
@@ -28,6 +29,7 @@
 
 - (BOOL)listener:(NSXPCListener *)listener shouldAcceptNewConnection:(NSXPCConnection *)connection {
     (void)listener;
+    NSLog(@"accepted XPC connection");
     connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
     connection.exportedObject = [StatusProvider new];
     __weak StatusListener *weakSelf = self;
@@ -48,10 +50,11 @@
 }
 @end
 
-static int serve(NSString *serviceName) {
+static int serve(NSString *serviceName, NSString *clientRequirement) {
     NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:serviceName];
     StatusListener *delegate = [StatusListener new];
     listener.delegate = delegate;
+    [listener setConnectionCodeSigningRequirement:clientRequirement];
     [listener resume];
     NSLog(@"read-only XPC listener ready");
     [[NSRunLoop currentRunLoop] run];
@@ -59,16 +62,21 @@ static int serve(NSString *serviceName) {
     return 0;
 }
 
-static int request(NSString *serviceName) {
+static int request(NSString *serviceName, NSString *serverRequirement) {
     NSError *error = nil;
     NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:serviceName options:0];
     connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
+    [connection setCodeSigningRequirement:serverRequirement];
     [connection resume];
 
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
     __block NSDictionary<NSString *, id> *result = nil;
+    __block NSError *requestError = nil;
     id<HelperStatusXPC> remote = [connection remoteObjectProxyWithErrorHandler:^(NSError *remoteError) {
-        fprintf(stderr, "XPC request failed: %s\n", remoteError.localizedDescription.UTF8String);
+        requestError = remoteError;
+        fprintf(stderr, "XPC request failed: domain=%s code=%ld detail=%s\n",
+                remoteError.domain.UTF8String, (long)remoteError.code,
+                remoteError.localizedDescription.UTF8String);
         dispatch_semaphore_signal(done);
     }];
     [remote fetchStatusWithReply:^(NSDictionary<NSString *, id> *status) {
@@ -81,6 +89,7 @@ static int request(NSString *serviceName) {
         fputs("XPC request timed out\n", stderr);
         return 1;
     }
+    if (requestError) return 1;
     if (![result[@"protocol_version"] isEqual:@(HelperStatusProtocolVersion)] ||
         ![result[@"state"] isEqual:@"read_only_prototype"] ||
         ![result[@"smc_access"] isEqual:@NO] ||
@@ -98,21 +107,30 @@ static int request(NSString *serviceName) {
     return 0;
 }
 
+static BOOL validCDHash(const char *hash) {
+    if (strlen(hash) != 40) return NO;
+    for (size_t index = 0; index < 40; ++index) {
+        if (!isxdigit((unsigned char)hash[index])) return NO;
+    }
+    return YES;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        if (argc != 3) {
-            fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME\n", argv[0]);
+        if (argc != 4 || !validCDHash(argv[3])) {
+            fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME EXPECTED_PEER_CDHASH\n", argv[0]);
             return 2;
         }
-        NSString *path = [NSString stringWithUTF8String:argv[2]];
+        NSString *serviceName = [NSString stringWithUTF8String:argv[2]];
+        NSString *peerRequirement = [NSString stringWithFormat:@"cdhash H\"%s\"", argv[3]];
         if (strcmp(argv[1], "serve") == 0) {
             if (geteuid() == 0) {
-                fputs("refusing to run an unauthenticated XPC prototype as root\n", stderr);
+                fputs("refusing to run an ad hoc-only XPC prototype as root\n", stderr);
                 return 1;
             }
-            return serve(path);
+            return serve(serviceName, peerRequirement);
         }
-        if (strcmp(argv[1], "request") == 0) return request(path);
+        if (strcmp(argv[1], "request") == 0) return request(serviceName, peerRequirement);
         fputs("unknown operation\n", stderr);
         return 2;
     }
