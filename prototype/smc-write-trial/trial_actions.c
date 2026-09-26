@@ -9,6 +9,9 @@ enum {
     RESTORE_VERIFY_SECONDS = 5,
     OBSERVE_SECONDS = 5,
     FTST_RELEASE_RETRIES = 3,
+    FTST_RELEASE_WAIT_SECONDS = 10,
+    FTST_BASELINE_WAIT_SECONDS = 90,
+    FTST_BASELINE_STABLE_SECONDS = 60,
 };
 
 static bool retry_mode(TrialBackend *backend, unsigned fan, uint8_t mode) {
@@ -85,11 +88,11 @@ TrialBaselineResult trial_observe_baseline_window(
     }
 }
 
-static bool modes_and_targets_released(const TrialObservation *observation) {
+static bool modes_released(const TrialObservation *observation) {
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if ((observation->mode[fan] != 0 && observation->mode[fan] != 3) ||
             !isfinite(observation->target_rpm[fan]) ||
-            fabs(observation->target_rpm[fan]) > 1.0) return false;
+            observation->target_rpm[fan] < 0.0) return false;
     }
     return true;
 }
@@ -161,42 +164,45 @@ bool trial_restore_unlock(TrialBackend *backend) {
     if (current.ftst == 0) return trial_restore_system(backend);
     if (current.ftst != 1) return false;
 
-    // Release both fans before dropping the unlock. If they remained untouched,
-    // skip mode/target writes and clear only the Ftst value owned by this trial.
-    if (!modes_and_targets_released(&current)) {
-        for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
-            (void)retry_mode(backend, fan, 0);
-            (void)retry_target(backend, fan, 0.0);
-        }
-        if (!backend->read_observation(backend->context, false, &current) ||
-            current.ftst != 1 || !modes_and_targets_released(&current)) return false;
+    // Mode 0 is treated as released by this trial protocol. The observed
+    // Ftst=1 state had mode 0 with minimum targets; requiring zero targets here
+    // may have prevented the earlier recovery attempt from clearing Ftst.
+    // Never clear Ftst while a fan still reports manual mode 1.
+    for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+        if (current.mode[fan] == 1 && !retry_mode(backend, fan, 0)) return false;
     }
+    if (!backend->read_observation(backend->context, false, &current) ||
+        current.ftst != 1 || !modes_released(&current)) return false;
 
     bool ftst_cleared = false;
-    for (unsigned attempt = 0; attempt < FTST_RELEASE_RETRIES; ++attempt) {
+    for (unsigned attempt = 0; attempt < FTST_RELEASE_RETRIES && !ftst_cleared; ++attempt) {
         (void)backend->write_ftst(backend->context, 0);
-        TrialObservation after_write = {0};
-        if (backend->read_observation(backend->context, false, &after_write) &&
-            after_write.ftst == 0) {
-            ftst_cleared = true;
-            if (trial_observation_is_baseline(&after_write)) return true;
-            if (!modes_and_targets_released(&after_write)) {
-                return trial_restore_system(backend);
+        for (unsigned second = 0; second < FTST_RELEASE_WAIT_SECONDS; ++second) {
+            TrialObservation after_write = {0};
+            if (!backend->read_observation(backend->context, false, &after_write) ||
+                !modes_released(&after_write)) return false;
+            if (after_write.ftst == 0) {
+                ftst_cleared = true;
+                break;
             }
-            break;
-        }
-        if (attempt + 1 < FTST_RELEASE_RETRIES) {
-            backend->wait_milliseconds(backend->context, RESTORE_RETRY_DELAY_MS);
+            if (after_write.ftst != 1 ||
+                !backend->wait_milliseconds(backend->context, 1000)) return false;
         }
     }
     if (!ftst_cleared) return false;
-    for (unsigned second = 0; second <= RESTORE_VERIFY_SECONDS; ++second) {
+
+    // A single baseline read after an accepted Ftst write was misleading on
+    // Mac15,7. Require an uninterrupted minute, allowing 30 s for takeover.
+    unsigned stable_seconds = 0;
+    for (unsigned second = 0; second <= FTST_BASELINE_WAIT_SECONDS; ++second) {
         TrialObservation observation = {0};
-        if (backend->read_observation(backend->context, false, &observation) &&
-            trial_observation_is_baseline(&observation)) return true;
-        if (second < RESTORE_VERIFY_SECONDS) {
-            backend->wait_milliseconds(backend->context, 1000);
-        }
+        if (!backend->read_observation(backend->context, false, &observation) ||
+            observation.ftst != 0 || !modes_released(&observation)) return false;
+        stable_seconds = trial_observation_is_baseline(&observation) ?
+                         stable_seconds + 1 : 0;
+        if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return true;
+        if (second < FTST_BASELINE_WAIT_SECONDS &&
+            !backend->wait_milliseconds(backend->context, 1000)) return false;
     }
     return false;
 }
