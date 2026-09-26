@@ -78,7 +78,10 @@ static bool mock_write_ftst(void *context, uint8_t value) {
     append_write(mock, event);
     ++mock->write_count;
     if (value == 1 && mock->fail_ftst_enable) {
-        if (mock->apply_ftst_on_error) mock->ftst = 1;
+        if (mock->apply_ftst_on_error) {
+            if (mock->delay_ftst_enable) mock->pending_ftst_enable = true;
+            else mock->ftst = 1;
+        }
         return false;
     }
     if (value == 1 && mock->delay_ftst_enable) {
@@ -244,12 +247,39 @@ static void ftst_check_round_trip_does_not_write_fan_keys(void) {
     assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
 }
 
-static void ftst_rejection_leaves_baseline_without_cleanup_writes(void) {
+static void ftst_rejection_sends_release_and_observes(void) {
     MockBackend mock = {.modes = {3, 3}, .fail_ftst_enable = true};
     TrialBackend backend = backend_for(&mock);
     assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
-    assert(strcmp(mock.writes, "Ftst=1;") == 0);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
     assert(mock.now >= 70.0);
+}
+
+static void failed_ftst_write_with_delayed_effect_still_recovers(void) {
+    MockBackend mock = {.modes = {3, 3}, .fail_ftst_enable = true,
+                        .apply_ftst_on_error = true,
+                        .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 12.0,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void failed_ftst_write_with_very_late_effect_stays_unverified(void) {
+    MockBackend mock = {.modes = {3, 3}, .fail_ftst_enable = true,
+                        .apply_ftst_on_error = true,
+                        .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 75.0};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.pending_ftst_enable);
+    assert(mock_wait(&mock, 5000));
+    TrialObservation delayed = {0};
+    assert(mock_read(&mock, false, &delayed));
+    assert(delayed.ftst == 1);
 }
 
 static void delayed_ftst_effect_is_restored_after_it_becomes_visible(void) {
@@ -305,6 +335,17 @@ static void unseen_ftst_with_failed_explicit_release_is_critical(void) {
     assert(trial_check_ftst(&backend) == TRIAL_RUN_RESTORE_FAILED);
     assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
     assert(mock.pending_ftst_enable);
+    assert(mock.now >= 70.0);
+}
+
+static void failed_release_does_not_skip_delayed_effect_observation(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 12.0,
+                        .fail_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_RESTORE_FAILED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;Ftst=0;Ftst=0;Ftst=0;") == 0);
+    assert(mock.ftst == 1 && mock.now >= 12.0);
 }
 
 static void ftst_error_with_changed_readback_still_clears_unlock(void) {
@@ -534,12 +575,15 @@ int main(void) {
     rejected_first_mode_write_leaves_baseline_without_restore_writes();
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
-    ftst_rejection_leaves_baseline_without_cleanup_writes();
+    ftst_rejection_sends_release_and_observes();
+    failed_ftst_write_with_delayed_effect_still_recovers();
+    failed_ftst_write_with_very_late_effect_stays_unverified();
     delayed_ftst_effect_is_restored_after_it_becomes_visible();
     accepted_ftst_with_later_effect_never_verifies_baseline();
     accepted_ftst_after_explicit_release_triggers_recovery();
     hot_post_write_read_triggers_immediate_release();
     unseen_ftst_with_failed_explicit_release_is_critical();
+    failed_release_does_not_skip_delayed_effect_observation();
     ftst_error_with_changed_readback_still_clears_unlock();
     independent_restore_clears_ftst_after_unchanged_modes();
     interruption_after_unlock_still_restores_ftst();
