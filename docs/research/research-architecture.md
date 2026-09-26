@@ -176,6 +176,7 @@ date: 2026-09-23
 | Независимый read-only наблюдатель состояния | `prototype/smc-write-trial/smc-write-trial.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Тесты preflight и восстановления | `prototype/smc-write-trial/trial_logic_test.c`, `prototype/smc-write-trial/trial_actions_test.c` |
 | Изолированная модель будущего срока владения helper | `prototype/helper-ipc/ControlLease.c`, `prototype/helper-ipc/ControlLeaseTest.c` |
+| Изолированный устойчивый маркер намерения helper | `prototype/helper-ipc/ControlIntentJournal.c`, `prototype/helper-ipc/ControlIntentJournalTest.c` |
 | Нативный совмещённый значок | `prototype/menu-bar/StatusItem.swift` |
 | Интегрированный AppKit значок | `prototype/menu-bar/StatusItemBridge.swift`, `prototype/menu-bar/StatusArtwork.swift` |
 | Канал и модель значка | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/menubar/MenuBarBridge.kt`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/menubar/TrayReading.kt` |

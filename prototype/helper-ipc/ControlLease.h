@@ -2,6 +2,7 @@
 #define VENTILATOR_CONTROL_LEASE_H
 
 #include "SmcBaselineRead.h"
+#include "ControlIntentJournal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -35,17 +36,19 @@ typedef struct {
 
 // This reducer has no SMC writer and is not linked into the read-only daemon.
 // The capability argument exists only for simulated future integration.
-void control_lease_start(ControlLease *lease, SmcBaselineResult result,
+void control_lease_start(ControlLease *lease, ControlIntentStatus intent,
+                         SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot, uint64_t now_ns);
 void control_lease_sample(ControlLease *lease, SmcBaselineResult result,
                           const SmcBaselineSnapshot *snapshot, uint64_t now_ns);
 bool control_lease_claim(ControlLease *lease, uint64_t owner, uint64_t now_ns,
-                         bool restore_protocol_verified, SmcBaselineResult result,
+                         bool restore_protocol_verified, ControlIntentStatus intent,
+                         SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot);
 bool control_lease_mark_write_pending(ControlLease *lease, uint64_t owner,
-                                      uint64_t now_ns);
+                                      uint64_t now_ns, ControlIntentStatus intent);
 bool control_lease_renew(ControlLease *lease, uint64_t owner, uint64_t now_ns,
-                         SmcBaselineResult result,
+                         ControlIntentStatus intent, SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot);
 void control_lease_owner_lost(ControlLease *lease, uint64_t owner);
 void control_lease_tick(ControlLease *lease, uint64_t now_ns);

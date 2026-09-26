@@ -53,7 +53,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make -C prototype/helper-ipc baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test
+      - run: make -C prototype/helper-ipc baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test
 
   # Separate from the gate, and on a schedule rather than on a pull request, because an anchor rots
   # when somebody refactors a **different** repository. A pull request here is the least likely

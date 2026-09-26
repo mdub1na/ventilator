@@ -37,17 +37,17 @@ static uint64_t finish_baseline_window(ControlLease *lease, uint64_t start,
 static uint64_t stable_lease(ControlLease *lease, SmcBaselineSnapshot *snapshot) {
     *snapshot = system_snapshot();
     uint64_t start = SECOND;
-    control_lease_start(lease, SMC_BASELINE_OK, snapshot, start);
+    control_lease_start(lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, snapshot, start);
     return finish_baseline_window(lease, start, snapshot);
 }
 
 static void startup_requires_the_full_window_and_explicit_capability(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot snapshot = system_snapshot();
-    control_lease_start(&lease, SMC_BASELINE_OK, &snapshot, SECOND);
+    control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot, SECOND);
     assert(lease.state == CONTROL_LEASE_OBSERVING && lease.samples == 1);
     assert(!control_lease_claim(&lease, 7, 2 * SECOND, true,
-                                SMC_BASELINE_OK, &snapshot));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot));
     for (unsigned second = 1; second < 60; ++second) {
         control_lease_sample(&lease, SMC_BASELINE_OK, &snapshot,
                              SECOND + second * SECOND);
@@ -56,12 +56,12 @@ static void startup_requires_the_full_window_and_explicit_capability(void) {
     control_lease_sample(&lease, SMC_BASELINE_OK, &snapshot, 61 * SECOND);
     assert(lease.state == CONTROL_LEASE_STABLE && lease.samples == 61);
     assert(!control_lease_claim(&lease, 7, 61 * SECOND, false,
-                                SMC_BASELINE_OK, &snapshot));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot));
     assert(control_lease_claim(&lease, 7, 61 * SECOND, true,
-                               SMC_BASELINE_OK, &snapshot));
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot));
     assert(lease.state == CONTROL_LEASE_HELD && lease.owner == 7);
     assert(!control_lease_claim(&lease, 8, 61 * SECOND, true,
-                                SMC_BASELINE_OK, &snapshot));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot));
     assert(lease.owner == 7);
 }
 
@@ -69,12 +69,12 @@ static void changed_startup_never_grants_from_one_later_baseline(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot changed = altered_snapshot();
     SmcBaselineSnapshot baseline = system_snapshot();
-    control_lease_start(&lease, SMC_BASELINE_OK, &changed, SECOND);
+    control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &changed, SECOND);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
     control_lease_sample(&lease, SMC_BASELINE_OK, &baseline, 2 * SECOND);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
     assert(!control_lease_claim(&lease, 7, 2 * SECOND, true,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     control_lease_recovery_started(&lease, SMC_BASELINE_OK, &baseline, 3 * SECOND);
     assert(lease.state == CONTROL_LEASE_VERIFYING_RECOVERY && lease.samples == 1);
     finish_baseline_window(&lease, 3 * SECOND, &baseline);
@@ -85,16 +85,16 @@ static void write_intent_and_client_loss_require_new_verification(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot baseline = {0};
     uint64_t now = stable_lease(&lease, &baseline);
-    assert(control_lease_claim(&lease, 23, now, true, SMC_BASELINE_OK, &baseline));
-    assert(!control_lease_mark_write_pending(&lease, 99, now));
-    assert(control_lease_mark_write_pending(&lease, 23, now));
+    assert(control_lease_claim(&lease, 23, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
+    assert(!control_lease_mark_write_pending(&lease, 99, now, CONTROL_INTENT_PENDING));
+    assert(control_lease_mark_write_pending(&lease, 23, now, CONTROL_INTENT_PENDING));
     assert(lease.write_pending);
     control_lease_owner_lost(&lease, 99);
     assert(lease.state == CONTROL_LEASE_HELD);
     control_lease_owner_lost(&lease, 23);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED && lease.write_pending);
     assert(!control_lease_renew(&lease, 23, now + SECOND,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     control_lease_recovery_started(&lease, SMC_BASELINE_OK, &baseline,
                                    now + SECOND);
     assert(lease.state == CONTROL_LEASE_VERIFYING_RECOVERY);
@@ -111,19 +111,20 @@ static void deadline_and_sleep_fail_closed(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot baseline = {0};
     uint64_t now = stable_lease(&lease, &baseline);
-    assert(control_lease_claim(&lease, 31, now, true, SMC_BASELINE_OK, &baseline));
+    assert(control_lease_claim(&lease, 31, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     control_lease_tick(&lease, now + CONTROL_LEASE_TTL_NS - 1);
     assert(lease.state == CONTROL_LEASE_HELD);
     control_lease_tick(&lease, now + CONTROL_LEASE_TTL_NS);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 
     now = stable_lease(&lease, &baseline);
-    assert(control_lease_claim(&lease, 31, now, true, SMC_BASELINE_OK, &baseline));
-    assert(control_lease_mark_write_pending(&lease, 31, now));
+    assert(control_lease_claim(&lease, 31, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
+    assert(control_lease_mark_write_pending(&lease, 31, now, CONTROL_INTENT_PENDING));
     control_lease_sleep(&lease);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
-    control_lease_start(&lease, SMC_BASELINE_OK, &baseline, now + SECOND);
-    assert(lease.state == CONTROL_LEASE_OBSERVING && !lease.write_pending);
+    control_lease_start(&lease, CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &baseline,
+                        now + SECOND);
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED && lease.write_pending);
 }
 
 static void system_reclaim_and_stale_reads_end_or_deny_a_lease(void) {
@@ -131,55 +132,55 @@ static void system_reclaim_and_stale_reads_end_or_deny_a_lease(void) {
     SmcBaselineSnapshot baseline = {0};
     uint64_t now = stable_lease(&lease, &baseline);
     assert(!control_lease_claim(&lease, 37, now + 3 * SECOND, true,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_STABLE);
     assert(control_lease_claim(&lease, 37, now, true,
-                               SMC_BASELINE_OK, &baseline));
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(!control_lease_renew(&lease, 99, now + SECOND,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_HELD);
-    assert(control_lease_mark_write_pending(&lease, 37, now));
+    assert(control_lease_mark_write_pending(&lease, 37, now, CONTROL_INTENT_PENDING));
     assert(!control_lease_renew(&lease, 37, now + SECOND,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 
     now = stable_lease(&lease, &baseline);
     assert(control_lease_claim(&lease, 37, now, true,
-                               SMC_BASELINE_OK, &baseline));
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(!control_lease_renew(&lease, 37, now - 1,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 
     now = stable_lease(&lease, &baseline);
     assert(control_lease_claim(&lease, 37, now, true,
-                               SMC_BASELINE_OK, &baseline));
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     SmcBaselineSnapshot changed = altered_snapshot();
     assert(!control_lease_renew(&lease, 37, now + SECOND,
-                                SMC_BASELINE_OK, &changed));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &changed));
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 }
 
 static void invalid_reads_timing_and_temperature_never_grant(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot baseline = system_snapshot();
-    control_lease_start(&lease, SMC_BASELINE_READ_FAILED, NULL, SECOND);
+    control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_READ_FAILED, NULL, SECOND);
     assert(lease.state == CONTROL_LEASE_READ_FAILED);
-    control_lease_start(&lease, SMC_BASELINE_OK, &baseline, SECOND);
+    control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline, SECOND);
     control_lease_sample(&lease, SMC_BASELINE_OK, &baseline, SECOND);
     assert(lease.state == CONTROL_LEASE_READ_FAILED);
 
     uint64_t now = stable_lease(&lease, &baseline);
     baseline.temperatures_c[0] = 75;
-    assert(!control_lease_claim(&lease, 41, now, true, SMC_BASELINE_OK, &baseline));
+    assert(!control_lease_claim(&lease, 41, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 
     now = stable_lease(&lease, &baseline);
-    assert(!control_lease_claim(&lease, 41, now, false, SMC_BASELINE_OK, &baseline));
+    assert(!control_lease_claim(&lease, 41, now, false, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_STABLE);
-    assert(control_lease_claim(&lease, 41, now, true, SMC_BASELINE_OK, &baseline));
+    assert(control_lease_claim(&lease, 41, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     baseline.temperatures_c[1] = 75;
     assert(!control_lease_renew(&lease, 41, now + SECOND,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 }
 
@@ -187,16 +188,47 @@ static void restart_rechecks_hardware_instead_of_reusing_memory(void) {
     ControlLease lease = {0};
     SmcBaselineSnapshot baseline = {0};
     uint64_t now = stable_lease(&lease, &baseline);
-    assert(control_lease_claim(&lease, 51, now, true, SMC_BASELINE_OK, &baseline));
-    assert(control_lease_mark_write_pending(&lease, 51, now));
+    assert(control_lease_claim(&lease, 51, now, true, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
+    assert(control_lease_mark_write_pending(&lease, 51, now, CONTROL_INTENT_PENDING));
     SmcBaselineSnapshot changed = altered_snapshot();
-    control_lease_start(&lease, SMC_BASELINE_OK, &changed, now + SECOND);
+    control_lease_start(&lease, CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &changed,
+                        now + SECOND);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
     assert(lease.owner == 0 && lease.samples == 0);
-    control_lease_start(&lease, SMC_BASELINE_OK, &baseline, now + 2 * SECOND);
-    assert(lease.state == CONTROL_LEASE_OBSERVING);
+    control_lease_start(&lease, CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &baseline,
+                        now + 2 * SECOND);
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED && lease.write_pending);
     assert(!control_lease_claim(&lease, 51, now + 2 * SECOND, true,
-                                SMC_BASELINE_OK, &baseline));
+                                CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &baseline));
+    control_lease_recovery_started(&lease, SMC_BASELINE_OK, &baseline,
+                                   now + 3 * SECOND);
+    finish_baseline_window(&lease, now + 3 * SECOND, &baseline);
+    assert(lease.state == CONTROL_LEASE_STABLE);
+    assert(!control_lease_claim(&lease, 51, now + 63 * SECOND, true,
+                                CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &baseline));
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
+}
+
+static void missing_or_corrupt_intent_marker_ends_a_lease(void) {
+    ControlLease lease = {0};
+    SmcBaselineSnapshot baseline = {0};
+    baseline = system_snapshot();
+    control_lease_start(&lease, CONTROL_INTENT_UNKNOWN, SMC_BASELINE_OK,
+                        &baseline, SECOND);
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED && lease.write_pending);
+    uint64_t now = stable_lease(&lease, &baseline);
+    assert(control_lease_claim(&lease, 61, now, true,
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
+    assert(!control_lease_mark_write_pending(&lease, 61, now, CONTROL_INTENT_CLEAR));
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
+
+    now = stable_lease(&lease, &baseline);
+    assert(control_lease_claim(&lease, 61, now, true,
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &baseline));
+    assert(control_lease_mark_write_pending(&lease, 61, now, CONTROL_INTENT_PENDING));
+    assert(!control_lease_renew(&lease, 61, now + SECOND,
+                                CONTROL_INTENT_UNKNOWN, SMC_BASELINE_OK, &baseline));
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
 }
 
 int main(void) {
@@ -207,6 +239,7 @@ int main(void) {
     system_reclaim_and_stale_reads_end_or_deny_a_lease();
     invalid_reads_timing_and_temperature_never_grant();
     restart_rechecks_hardware_instead_of_reusing_memory();
+    missing_or_corrupt_intent_marker_ends_a_lease();
     assert(strcmp(control_lease_state_name(CONTROL_LEASE_RECOVERY_REQUIRED),
                   "recovery_required") == 0);
     puts("control lease tests passed");
