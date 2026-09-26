@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | watch APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -172,6 +172,37 @@ case "$action" in
         ventilator --helper-request
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
+        ;;
+    watch)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        start=$(ventilator --helper-watch-start)
+        before=$(running_root_pid) || { echo "root daemon did not start" >&2; exit 1; }
+        case "$start" in *'"state":"running"'* ) ;; *) echo "watch did not start: $start" >&2; exit 1 ;; esac
+        case "$start" in *'"samples":1'* ) ;; *) echo "watch did not take first sample: $start" >&2; exit 1 ;; esac
+        case "$start" in *"\"daemon_pid\":$before"* ) ;; *) echo "watch started in another daemon: $start" >&2; exit 1 ;; esac
+        echo "watch-start=$start"
+        sleep 60
+        attempt=0
+        while :; do
+            final=$(ventilator --helper-watch-status)
+            case "$final" in
+                *'"state":"stable"'* ) break ;;
+                *'"state":"running"'* )
+                    [ "$attempt" -lt 15 ] || { echo "watch did not finish in bounded time: $final" >&2; exit 1; }
+                    attempt=$((attempt + 1))
+                    sleep 2
+                    ;;
+                *) echo "watch stopped before stable completion: $final" >&2; exit 1 ;;
+            esac
+        done
+        case "$final" in *'"samples":61'* ) ;; *) echo "watch missed samples: $final" >&2; exit 1 ;; esac
+        case "$final" in *'"last_second":60'* ) ;; *) echo "watch missed final second: $final" >&2; exit 1 ;; esac
+        case "$final" in *"\"daemon_pid\":$before"* ) ;; *) echo "daemon restarted during watch: $final" >&2; exit 1 ;; esac
+        after=$(running_root_pid) || { echo "root daemon disappeared" >&2; exit 1; }
+        [ "$after" = "$before" ] || { echo "root daemon PID changed during watch" >&2; exit 1; }
+        echo "watch-final=$final"
+        echo "watch=stable samples=61 daemon-persisted=true"
         ;;
     ui-crash)
         require_app "$@"

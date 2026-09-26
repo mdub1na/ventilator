@@ -24,6 +24,8 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 
 Метод `fetchStatusWithReply` возвращает четыре поля: `protocol_version: 1`, `state: read_only_prototype`, `smc_access` и `write_available: false`. Для ad hoc сервера `smc_access=false`, для подписанного daemon с read-only reader — `true`. Метод `fetchBaselineWithReply` не принимает параметров; daemon читает только `FNum`, `Ftst`, режимы, цели и фактические RPM двух вентиляторов, `TCMz`, `Tg0D`, `TH0a`. При ошибке он возвращает `available=false` и ограниченный код причины, а клиент отвергает снимок. При успехе ответ содержит `available=true`, модель/ОС, монотонное время чтения, исходное состояние и фиксированные массивы значений. Исходное состояние: `Ftst=0`, режимы `[3,3]`, обе цели не выше 1 RPM. Для ad hoc `serve` и `request` CLI требует 40-значный ожидаемый `cdhash` peer. Для подписанного клиента и daemon нужен 10-значный Team ID и точные идентификаторы. Ошибка XPC, другая версия, иное содержимое или ожидание более 5 секунд отклоняются клиентом. Это локальный протокол, не HTTP API.
 
+Дополнительные методы `startBaselineWatchWithReply` и `fetchBaselineWatchWithReply` также не принимают параметров. UID 0 daemon хранит состояние 61 последовательного read-only снимка после выхода клиента и отдаёт `idle`, `running`, `stable`, `changed` или `read_failed`. Подписанный клиент проверяет число снимков, последнюю отметку и пересчитывает `baseline`. На `Mac15,7`/macOS 27.0 наблюдение дошло до `stable` за 66,09 секунды от одного PID daemon, когда первый JVM-процесс уже завершился. Подробности и ограничения — в [сценариях watcher](../features/helper-baseline-watch.md).
+
 ## 3. Code anchors
 
 | Файл | Назначение |
@@ -37,6 +39,8 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 | `prototype/helper-ipc/daemon-status.m` | отдельный ограниченный read-only daemon |
 | `prototype/helper-ipc/SmcBaselineRead.c` | фиксированный SMC reader и критерий исходного состояния |
 | `prototype/helper-ipc/HelperBaselineValidation.h` | проверка формы XPC снимка и независимый пересчёт `baseline` на стороне клиентов |
+| `prototype/helper-ipc/BaselineWatch.c`, `prototype/helper-ipc/BaselineWatchController.m` | sticky state machine и таймер внутри daemon |
+| `prototype/helper-ipc/HelperWatchValidation.h` | проверка XPC статуса watcher на стороне клиента |
 | `prototype/helper-ipc/daemon-registration.m` | вызовы `SMAppService.daemon` из тестового `.app` |
 | `prototype/helper-ipc/daemon-probe.sh` | подписанный пакет, регистрация, проверка и удаление |
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |

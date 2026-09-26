@@ -5,3 +5,5 @@
 /libhelper-probe.dylib
 /SmcBaselineReadTest
 /HelperBaselineValidationTest
+/BaselineWatchTest
+/HelperWatchValidationTest

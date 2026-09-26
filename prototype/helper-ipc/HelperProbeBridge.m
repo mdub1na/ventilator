@@ -1,5 +1,6 @@
 #import "HelperStatus.h"
 #import "HelperBaselineValidation.h"
+#import "HelperWatchValidation.h"
 #import <Security/Security.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <jni.h>
@@ -85,7 +86,14 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_setRe
     }
 }
 
-static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, BOOL baseline) {
+typedef enum {
+    DaemonRequestStatus,
+    DaemonRequestBaseline,
+    DaemonRequestWatchStart,
+    DaemonRequestWatchStatus,
+} DaemonRequest;
+
+static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequest request) {
     NSString *team = ownTeamID();
     if (!team) {
         throwFailure(environment, @"Ventilator.app must have a trusted development signature");
@@ -111,8 +119,12 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, BOOL basel
         result = response;
         dispatch_semaphore_signal(done);
     };
-    if (baseline) [remote fetchBaselineWithReply:complete];
-    else [remote fetchStatusWithReply:complete];
+    switch (request) {
+        case DaemonRequestStatus: [remote fetchStatusWithReply:complete]; break;
+        case DaemonRequestBaseline: [remote fetchBaselineWithReply:complete]; break;
+        case DaemonRequestWatchStart: [remote startBaselineWatchWithReply:complete]; break;
+        case DaemonRequestWatchStatus: [remote fetchBaselineWatchWithReply:complete]; break;
+    }
     long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     [connection invalidate];
     if (timeout != 0) {
@@ -143,7 +155,7 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_reque
 ) {
     (void)self;
     @autoreleasepool {
-        NSDictionary<NSString *, id> *result = fetchDaemon(environment, NO);
+        NSDictionary<NSString *, id> *result = fetchDaemon(environment, DaemonRequestStatus);
         if (!result) return NULL;
         if (![result[@"protocol_version"] isEqual:@(HelperStatusProtocolVersion)] ||
             ![result[@"state"] isEqual:@"read_only_prototype"] ||
@@ -161,7 +173,7 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_reque
 ) {
     (void)self;
     @autoreleasepool {
-        NSDictionary<NSString *, id> *result = fetchDaemon(environment, YES);
+        NSDictionary<NSString *, id> *result = fetchDaemon(environment, DaemonRequestBaseline);
         if (!result) return NULL;
         if ([result[@"available"] isEqual:@NO] &&
             [result[@"reason"] isKindOfClass:NSString.class]) {
@@ -174,4 +186,28 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_reque
         }
         return encodeResult(environment, result);
     }
+}
+
+static jstring requestWatch(JNIEnv *environment, DaemonRequest request) {
+    NSDictionary<NSString *, id> *result = fetchDaemon(environment, request);
+    if (!result) return NULL;
+    if (!HelperWatchResponseValid(result)) {
+        throwFailure(environment, @"XPC watch contract mismatch");
+        return NULL;
+    }
+    return encodeResult(environment, result);
+}
+
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_startWatchNative(
+    JNIEnv *environment, jobject self
+) {
+    (void)self;
+    @autoreleasepool { return requestWatch(environment, DaemonRequestWatchStart); }
+}
+
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_watchStatusNative(
+    JNIEnv *environment, jobject self
+) {
+    (void)self;
+    @autoreleasepool { return requestWatch(environment, DaemonRequestWatchStatus); }
 }

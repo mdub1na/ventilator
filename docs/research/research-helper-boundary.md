@@ -75,5 +75,8 @@ Compose/JVM Ventilator.app
 | Отдельный подписанный read-only LaunchDaemon | `prototype/helper-ipc/daemon-status.m`, `prototype/helper-ipc/daemon-registration.m`, `prototype/helper-ipc/daemon-probe.sh` |
 | Пользовательская проба подписанного IPC | `prototype/helper-ipc/signed-ipc-smoke.sh` |
 | Интеграционная подписанная копия и JNI-мост | `prototype/helper-ipc/integrated-probe.sh`, `prototype/helper-ipc/HelperProbeBridge.m`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` |
+| Независимый ограниченный watcher в UID 0 daemon | `prototype/helper-ipc/BaselineWatch.c`, `prototype/helper-ipc/BaselineWatchController.m`, `prototype/helper-ipc/HelperWatchValidation.h` |
 
 Новая сборка daemon предоставляет статус и фиксированный read-only снимок `Ftst`, режимов, целей, RPM и трёх температур; XPC метод не принимает параметров. Прямой reader, signed XPC в пользовательском домене и запрос из главного JVM-процесса к UID 0 daemon проверены на `Mac15,7`/macOS 27.0. До разрешения macOS запрос не прошёл; после `enabled` root daemon вернул исходный снимок. `unregister` и `launchctl` подтвердили удаление службы, временный пакет удалён, фоновая активность возвращена в «выкл.». Аппаратной записи в daemon нет, а эти пробы не доказывают безопасность будущего интерфейса управления.
+
+Отдельная [минутная проба](../features/helper-baseline-watch.md) подтвердила, что daemon продолжает фиксированные чтения после окончания инициирующего клиента: 61 исходный снимок за 66,09 секунды от одного UID 0 PID. В симуляции позднее `Ftst=1` немедленно переводит state machine в сохраняемое `changed`. Это наблюдение не даёт способа возврата управления системе, если состояние действительно изменится.

@@ -26,13 +26,14 @@ cd prototype/helper-ipc
 
 If `register` reports `Operation not permitted` and `status` says `requiresApproval`, approve the test background item in macOS System Settings, then run `status` and `check`. The app must stay in place until `unregister` verifies `notRegistered` and absence from `launchctl print system/com.ventilator.helper-ipc.signed-daemon-test`; `cleanup` enforces this. `check` accepts the expected signed client, rejects both an ad hoc client and a client with the same Team ID but another identifier, requests a fixed-key SMC snapshot, and confirms the system service. The daemon has no SMC write selector or write method. Its successful local probe does not establish a safe SMC control path.
 
-For the main-app integration probe, run `./integrated-probe.sh prepare` from this directory. It builds a separate Apple Development signed copy of the real Compose `Ventilator.app`, embeds the same read-only daemon and a LaunchDaemon plist, then prints `prepared=...`. The app's own JVM process loads `libhelper-probe.dylib` and provides manual `--helper-request` and `--helper-baseline` commands. The latter reads only fixed fan and temperature keys; callers cannot choose keys. Use the probe commands below:
+For the main-app integration probe, run `./integrated-probe.sh prepare` from this directory. It builds a separate Apple Development signed copy of the real Compose `Ventilator.app`, embeds the same read-only daemon and a LaunchDaemon plist, then prints `prepared=...`. The app's own JVM process loads `libhelper-probe.dylib` and provides manual `--helper-request`, `--helper-baseline`, `--helper-watch-start`, and `--helper-watch-status` commands. The latter methods read only fixed fan and temperature keys; callers cannot choose keys. Use the probe commands below:
 
 ```sh
 ./integrated-probe.sh status "$APP"
 ./client-lifecycle-smoke.sh "$APP" # before root daemon registration
 ./integrated-probe.sh register "$APP"
 ./integrated-probe.sh check "$APP"
+./integrated-probe.sh watch "$APP" # waits for 61 read-only snapshots; about one minute
 ./integrated-probe.sh ui-crash "$APP"
 ./integrated-probe.sh restart-before "$APP"
 # In a separate Terminal, run the sudo launchctl kill command printed above.
@@ -47,6 +48,8 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 For a **separate** in-flight root request probe, first reach `enabled` and pass `check`, then run `./root-inflight-smoke.sh "$APP"` from a Terminal as the logged-in user. It asks for `sudo` in that Terminal, sends `SIGSTOP` and `SIGKILL` only to `system/com.ventilator.helper-ipc.read-only`, requires the pending client request to fail without a status, then requires a new signed request from a new UID 0 daemon PID. The script resumes a stopped test daemon on ordinary errors. Keep a second Terminal ready with `sudo launchctl kill SIGCONT system/com.ventilator.helper-ipc.read-only` if the script is forcibly terminated. Always run `integrated-probe.sh unregister "$APP"` and `cleanup "$APP"` afterward and restore the background switch. Neither process has an SMC writer.
 
 If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status and a fixed-key SMC snapshot from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
+
+`watch` starts a bounded read-only loop in the daemon, lets the initiating JVM process exit, then polls from new JVM processes until the daemon reports `stable` or a bounded timeout. It requires 61 baseline snapshots, second 60, and an unchanged UID 0 daemon PID. It reports an error on `changed`, read failure, or timeout; it never attempts SMC recovery. On Mac15,7/macOS 27.0 the completed interval lasted 66.09 seconds, ended `stable`, and cleanup restored the system service and background switch to their prior states. See [the watch feature](../../docs/features/helper-baseline-watch.md).
 
 Before registration, `client-lifecycle-smoke.sh` temporarily advertises the same Mach service name in the **user** bootstrap domain with the correctly signed daemon. Its signed control client must reach that service, while the main app must reject it because its `NSXPCConnection` uses `NSXPCConnectionPrivileged`. The script then suspends the user daemon during a request, kills it, requires that request to fail, explicitly restarts the daemon, and requires a fresh request to succeed. It removes the LaunchAgent even on failure; a `CRITICAL` removal error retains the plist for investigation. This tests client failure handling without root and does not prove a root in-flight interruption.
 
