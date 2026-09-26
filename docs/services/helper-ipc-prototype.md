@@ -18,6 +18,8 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 
 Отдельный `daemon-status` предоставляет фиксированный статус и запрос снимка по заранее заданным SMC-ключам; он принимает только клиента с Apple anchor, точным code identifier и Team ID. Подписанный `helper-status request-signed` требует такую же идентичность daemon. Прежняя проверка системного процесса с UID 0 относилась к версии без доступа к AppleSMC. Новая версия линкует IOKit, но в её модуле `SmcBaselineRead.c` есть только команды чтения `5` и `9`, а SMC writer не включён. Она не входит в основной установленный `Ventilator.app`.
 
+Отдельный [reducer будущего владения](../features/helper-control-lease.md) симулирует исходное минутное наблюдение, одного владельца с 15-секундным сроком и обязательную повторную проверку после потери клиента, сна и перезапуска daemon. Он собирается только в unit-тесте; в `daemon-status` не линкуется и не добавляет XPC API или SMC запись.
+
 Для проверки интеграции `HelperProbeBridge.m` загружается из основного JVM-процесса упакованного `Ventilator.app`. Мост читает Team ID собственной подписи через Security framework, требует точный identifier daemon и предоставляет только статус регистрации, явную регистрацию/отмену, `fetchStatusWithReply` и `fetchBaselineWithReply`. Команды доступны диагностическому CLI; обычный запуск окна не обращается к daemon. `integrated-probe.sh` добавляет daemon в отдельную подписанную копию приложения, не в установленный пользовательский пакет.
 
 ## 2. Contract
@@ -52,6 +54,7 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 | `prototype/helper-ipc/BaselineWatch.c`, `prototype/helper-ipc/BaselineWatchController.m` | sticky state machine и таймер внутри daemon |
 | `prototype/helper-ipc/HelperWatchValidation.h` | проверка XPC статуса watcher на стороне клиента |
 | `prototype/helper-ipc/StartupAuditController.m`, `prototype/helper-ipc/HelperStartupAuditValidation.h` | одно чтение перед listener и проверка ответа у клиента |
+| `prototype/helper-ipc/ControlLease.c`, `prototype/helper-ipc/ControlLeaseTest.c` | изолированный reducer будущего владения и отказные тесты; не входят в daemon |
 | `prototype/helper-ipc/daemon-registration.m` | вызовы `SMAppService.daemon` из тестового `.app` |
 | `prototype/helper-ipc/daemon-probe.sh` | подписанный пакет, регистрация, проверка и удаление |
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |
