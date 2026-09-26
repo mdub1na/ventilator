@@ -40,6 +40,7 @@ publishes: [fixed local XPC status]
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |
 | `prototype/helper-ipc/HelperProbeBridge.m` | JNI-мост основного процесса к ServiceManagement и XPC |
 | `prototype/helper-ipc/integrated-probe.sh` | подписанная копия Compose app и проверка её daemon |
+| `prototype/helper-ipc/root-inflight-smoke.sh` | отдельная проба прерванного запроса к системному read-only daemon |
 | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` | диагностические команды основного JVM-процесса |
 | `prototype/desktop-app/build.gradle.kts` | упаковка JNI-библиотеки |
 

@@ -110,6 +110,12 @@ tags: [macos, xpc, safety]
 * **Then:** старый запрос завершается ошибкой без статуса, новый запрос после явного запуска принимает ровно четыре поля.
 * **Manual:** `client-lifecycle-smoke.sh` на `Mac15,7`/macOS 27.0, §3; поведение root daemon остаётся отдельной проверкой.
 
+### Scenario: Прерванный запрос к системному read-only daemon
+* **Given:** подписанное приложение получило исходный ответ от daemon с UID 0; его регистрация `enabled`.
+* **When:** daemon временно останавливают, приложение начинает запрос, затем этот daemon завершают через `SIGKILL`.
+* **Then:** старый запрос завершается ошибкой без статуса; новый запрос получает четыре поля от другого PID с UID 0; тестовая регистрация и пакет удаляются.
+* **Manual:** `root-inflight-smoke.sh` между `integrated-probe.sh check` и `unregister/cleanup`; до аппаратного запуска результат не подтверждён.
+
 ### Scenario: Read-only daemon доступен после сна и пробуждения
 * **Given:** зарегистрированный daemon ответил приложению, записаны текущая загрузка и счётчик циклов сна/пробуждения macOS.
 * **When:** Mac засыпает и просыпается без перезагрузки, после чего приложение делает новый XPC запрос.
@@ -137,4 +143,4 @@ tags: [macos, xpc, safety]
 | Тестовый пакет и регистрация LaunchAgent | `prototype/helper-ipc/package-smoke.sh`, `prototype/helper-ipc/agent-registration.m` |
 | Подписанный read-only daemon и его жизненный цикл | `prototype/helper-ipc/daemon-status.m`, `prototype/helper-ipc/daemon-registration.m`, `prototype/helper-ipc/daemon-probe.sh` |
 | Проба подписанного IPC в пользовательском домене | `prototype/helper-ipc/signed-ipc-smoke.sh` |
-| Копия основного приложения и JNI-мост | `prototype/helper-ipc/integrated-probe.sh`, `prototype/helper-ipc/client-lifecycle-smoke.sh`, `prototype/helper-ipc/HelperProbeBridge.m`, `prototype/desktop-app/build.gradle.kts`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` |
+| Копия основного приложения и JNI-мост | `prototype/helper-ipc/integrated-probe.sh`, `prototype/helper-ipc/client-lifecycle-smoke.sh`, `prototype/helper-ipc/root-inflight-smoke.sh`, `prototype/helper-ipc/HelperProbeBridge.m`, `prototype/desktop-app/build.gradle.kts`, `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` |
