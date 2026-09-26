@@ -62,7 +62,11 @@ cleanup() {
         kill "$request_pid" 2>/dev/null || true
         wait "$request_pid" 2>/dev/null || true
     fi
-    rm -f "$output"
+    if [ "$result" -eq 0 ]; then
+        rm -f "$output"
+    elif [ -f "$output" ]; then
+        echo "request log retained: $output" >&2
+    fi
     exit "$result"
 }
 trap cleanup EXIT HUP INT TERM
