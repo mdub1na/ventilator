@@ -19,9 +19,10 @@ make report
 
 ## Coverage map
 
-### Research (1)
+### Research (2)
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
+- [x] [research-helper-boundary](research/research-helper-boundary.md) — проверенные свойства macOS и поэтапный проект границы helper для M2-02; сам helper ещё не реализован.
 
 ### Features (5)
 
