@@ -106,6 +106,12 @@ static SmcBaselineResult read_float(io_connect_t connection, const char *key, do
     return SMC_BASELINE_OK;
 }
 
+static SmcBaselineResult read_temperature(io_connect_t connection, const char *key, double *value) {
+    SmcBaselineResult result = read_float(connection, key, value);
+    if (result == SMC_BASELINE_OK && !smc_baseline_temperature_valid(*value)) *value = NAN;
+    return result;
+}
+
 SmcBaselineResult smc_baseline_read(SmcBaselineSnapshot *snapshot) {
     if (snapshot == NULL) return SMC_BASELINE_UNEXPECTED_FORMAT;
     memset(snapshot, 0, sizeof(*snapshot));
@@ -130,9 +136,9 @@ SmcBaselineResult smc_baseline_read(SmcBaselineSnapshot *snapshot) {
     READ_OR_CLOSE(read_float(connection, "F1Tg", &snapshot->target_rpm[1]));
     READ_OR_CLOSE(read_float(connection, "F0Ac", &snapshot->actual_rpm[0]));
     READ_OR_CLOSE(read_float(connection, "F1Ac", &snapshot->actual_rpm[1]));
-    READ_OR_CLOSE(read_float(connection, "TCMz", &snapshot->temperatures_c[0]));
-    READ_OR_CLOSE(read_float(connection, "Tg0D", &snapshot->temperatures_c[1]));
-    READ_OR_CLOSE(read_float(connection, "TH0a", &snapshot->temperatures_c[2]));
+    READ_OR_CLOSE(read_temperature(connection, "TCMz", &snapshot->temperatures_c[0]));
+    READ_OR_CLOSE(read_temperature(connection, "Tg0D", &snapshot->temperatures_c[1]));
+    READ_OR_CLOSE(read_temperature(connection, "TH0a", &snapshot->temperatures_c[2]));
 #undef READ_OR_CLOSE
 close:
     IOServiceClose(connection);

@@ -1,5 +1,6 @@
 #import "StartupAuditController.h"
 #import "HelperStatus.h"
+#import "HelperTemperatureValue.h"
 
 #include <time.h>
 #include <unistd.h>
@@ -52,9 +53,9 @@ static uint64_t monotonicNanoseconds(void) {
         response[@"mode"] = @[@(snapshot.mode[0]), @(snapshot.mode[1])];
         response[@"target_rpm"] = @[@(snapshot.target_rpm[0]), @(snapshot.target_rpm[1])];
         response[@"actual_rpm"] = @[@(snapshot.actual_rpm[0]), @(snapshot.actual_rpm[1])];
-        response[@"temperatures_c"] = @[@(snapshot.temperatures_c[0]),
-                                         @(snapshot.temperatures_c[1]),
-                                         @(snapshot.temperatures_c[2])];
+        response[@"temperatures_c"] = @[HelperTemperatureValue(snapshot.temperatures_c[0]),
+                                         HelperTemperatureValue(snapshot.temperatures_c[1]),
+                                         HelperTemperatureValue(snapshot.temperatures_c[2])];
     }
     self.capturedStatus = response;
     return self;

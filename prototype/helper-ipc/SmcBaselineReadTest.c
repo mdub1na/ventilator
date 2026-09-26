@@ -1,6 +1,7 @@
 #include "SmcBaselineRead.h"
 
 #include <assert.h>
+#include <math.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -20,6 +21,12 @@ int main(int argc, char **argv) {
     snapshot.mode[0] = 0;
     assert(!smc_baseline_is_system(&snapshot));
     assert(strcmp(smc_baseline_result_name(SMC_BASELINE_READ_FAILED), "read_failed") == 0);
+    assert(!smc_baseline_temperature_valid(-1.95));
+    assert(!smc_baseline_temperature_valid(9.99));
+    assert(smc_baseline_temperature_valid(10));
+    assert(smc_baseline_temperature_valid(115));
+    assert(!smc_baseline_temperature_valid(115.01));
+    assert(!smc_baseline_temperature_valid(NAN));
     if (argc == 1) {
         puts("baseline classifier tests passed");
         return 0;

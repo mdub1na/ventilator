@@ -15,6 +15,10 @@ int main(void) {
         NSCAssert(HelperBaselineResponseValid(changed), @"changed snapshot must pass as changed");
         changed[@"temperatures_c"] = @[@50, @"invalid", @30];
         NSCAssert(!HelperBaselineResponseValid(changed), @"non-numeric temperature must fail");
+        changed[@"temperatures_c"] = @[@50, @(-1.95), @30];
+        NSCAssert(!HelperBaselineResponseValid(changed), @"implausible numeric temperature must fail");
+        changed[@"temperatures_c"] = @[@50, [NSNull null], @30];
+        NSCAssert(HelperBaselineResponseValid(changed), @"unavailable GPU must preserve fan baseline");
         puts("XPC baseline validation tests passed");
         return 0;
     }

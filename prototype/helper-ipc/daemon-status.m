@@ -1,6 +1,7 @@
 #import "HelperStatus.h"
 #import "BaselineWatchController.h"
 #import "StartupAuditController.h"
+#import "HelperTemperatureValue.h"
 #include "SmcBaselineRead.h"
 #include <ctype.h>
 #include <time.h>
@@ -44,9 +45,9 @@
             @"mode": @[@(snapshot.mode[0]), @(snapshot.mode[1])],
             @"target_rpm": @[@(snapshot.target_rpm[0]), @(snapshot.target_rpm[1])],
             @"actual_rpm": @[@(snapshot.actual_rpm[0]), @(snapshot.actual_rpm[1])],
-            @"temperatures_c": @[@(snapshot.temperatures_c[0]),
-                                  @(snapshot.temperatures_c[1]),
-                                  @(snapshot.temperatures_c[2])]});
+            @"temperatures_c": @[HelperTemperatureValue(snapshot.temperatures_c[0]),
+                                  HelperTemperatureValue(snapshot.temperatures_c[1]),
+                                  HelperTemperatureValue(snapshot.temperatures_c[2])]});
 }
 
 - (void)fetchStartupAuditWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
