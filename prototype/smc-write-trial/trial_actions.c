@@ -41,6 +41,50 @@ bool trial_observation_is_baseline(const TrialObservation *observation) {
     return true;
 }
 
+TrialBaselineResult trial_observe_baseline_window(
+    TrialBaselineObserver *observer, unsigned last_second) {
+    TrialBaselineResult result = {.status = TRIAL_BASELINE_INVALID};
+    if (observer == NULL || observer->read_observation == NULL ||
+        observer->wait_milliseconds == NULL || observer->should_stop == NULL ||
+        observer->record_observation == NULL) return result;
+
+    for (unsigned second = 0; ; ++second) {
+        result.second = second;
+        if (observer->should_stop(observer->context)) {
+            result.status = TRIAL_BASELINE_INTERRUPTED;
+            return result;
+        }
+        TrialObservation observation = {0};
+        if (!observer->read_observation(observer->context, &observation)) {
+            result.status = TRIAL_BASELINE_READ_FAILED;
+            return result;
+        }
+        ++result.samples;
+        if (observer->should_stop(observer->context)) {
+            result.status = TRIAL_BASELINE_INTERRUPTED;
+            return result;
+        }
+        observer->record_observation(observer->context, second, &observation);
+        if (!trial_observation_is_baseline(&observation)) {
+            result.status = TRIAL_BASELINE_CHANGED;
+            return result;
+        }
+        if (observer->should_stop(observer->context)) {
+            result.status = TRIAL_BASELINE_INTERRUPTED;
+            return result;
+        }
+        if (second == last_second) {
+            result.status = TRIAL_BASELINE_STABLE;
+            return result;
+        }
+        if (!observer->wait_milliseconds(observer->context, 1000)) {
+            result.status = observer->should_stop(observer->context) ?
+                            TRIAL_BASELINE_INTERRUPTED : TRIAL_BASELINE_WAIT_FAILED;
+            return result;
+        }
+    }
+}
+
 static bool modes_and_targets_released(const TrialObservation *observation) {
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if ((observation->mode[fan] != 0 && observation->mode[fan] != 3) ||

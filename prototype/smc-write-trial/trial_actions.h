@@ -33,7 +33,33 @@ typedef enum {
     TRIAL_RUN_RESTORE_FAILED,
 } TrialRunStatus;
 
+typedef struct {
+    void *context;
+    bool (*read_observation)(void *context, TrialObservation *output);
+    bool (*wait_milliseconds)(void *context, unsigned milliseconds);
+    bool (*should_stop)(void *context);
+    void (*record_observation)(void *context, unsigned second,
+                               const TrialObservation *observation);
+} TrialBaselineObserver;
+
+typedef enum {
+    TRIAL_BASELINE_STABLE,
+    TRIAL_BASELINE_CHANGED,
+    TRIAL_BASELINE_READ_FAILED,
+    TRIAL_BASELINE_WAIT_FAILED,
+    TRIAL_BASELINE_INTERRUPTED,
+    TRIAL_BASELINE_INVALID,
+} TrialBaselineStatus;
+
+typedef struct {
+    TrialBaselineStatus status;
+    unsigned second;
+    unsigned samples;
+} TrialBaselineResult;
+
 bool trial_observation_is_baseline(const TrialObservation *observation);
+TrialBaselineResult trial_observe_baseline_window(
+    TrialBaselineObserver *observer, unsigned last_second);
 
 bool trial_restore_system(TrialBackend *backend);
 bool trial_restore_unlock(TrialBackend *backend);

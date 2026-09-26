@@ -289,6 +289,105 @@ static void baseline_observation_rejects_changed_state(void) {
     assert(!trial_observation_is_baseline(&observation));
 }
 
+typedef struct {
+    unsigned reads;
+    unsigned waits;
+    unsigned records;
+    unsigned change_at;
+    unsigned fail_read_at;
+    bool change_state;
+    bool fail_read;
+    bool fail_wait;
+    bool stop_after_wait;
+} FakeBaselineObserver;
+
+static bool fake_baseline_read(void *context, TrialObservation *output) {
+    FakeBaselineObserver *fake = context;
+    unsigned sample = fake->reads++;
+    if (fake->fail_read && sample == fake->fail_read_at) return false;
+    output->mode[0] = 3;
+    output->mode[1] = 3;
+    if (fake->change_state && sample == fake->change_at) {
+        output->ftst = 1;
+        output->mode[0] = 0;
+        output->mode[1] = 0;
+        output->target_rpm[0] = 1350;
+        output->target_rpm[1] = 1458;
+    }
+    return true;
+}
+
+static bool fake_baseline_wait(void *context, unsigned milliseconds) {
+    FakeBaselineObserver *fake = context;
+    assert(milliseconds == 1000);
+    ++fake->waits;
+    return !fake->fail_wait;
+}
+
+static bool fake_baseline_stopped(void *context) {
+    FakeBaselineObserver *fake = context;
+    return fake->stop_after_wait && fake->waits > 0;
+}
+
+static void fake_baseline_record(
+    void *context, unsigned second, const TrialObservation *observation) {
+    FakeBaselineObserver *fake = context;
+    assert(second == fake->records);
+    assert(observation != NULL);
+    ++fake->records;
+}
+
+static TrialBaselineObserver baseline_backend_for(FakeBaselineObserver *fake) {
+    return (TrialBaselineObserver){
+        .context = fake,
+        .read_observation = fake_baseline_read,
+        .wait_milliseconds = fake_baseline_wait,
+        .should_stop = fake_baseline_stopped,
+        .record_observation = fake_baseline_record,
+    };
+}
+
+static void baseline_window_requires_every_sample(void) {
+    FakeBaselineObserver fake = {0};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_STABLE);
+    assert(result.second == 60 && result.samples == 61);
+    assert(fake.reads == 61 && fake.records == 61 && fake.waits == 60);
+}
+
+static void baseline_window_catches_delayed_ftst_change(void) {
+    FakeBaselineObserver fake = {.change_state = true, .change_at = 2};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_CHANGED);
+    assert(result.second == 2 && result.samples == 3);
+    assert(fake.reads == 3 && fake.records == 3 && fake.waits == 2);
+}
+
+static void baseline_window_stops_on_read_failure(void) {
+    FakeBaselineObserver fake = {.fail_read = true, .fail_read_at = 2};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_READ_FAILED);
+    assert(result.second == 2 && result.samples == 2);
+    assert(fake.reads == 3 && fake.records == 2 && fake.waits == 2);
+}
+
+static void baseline_window_stops_on_interruption_or_wait_failure(void) {
+    FakeBaselineObserver interrupted = {.stop_after_wait = true};
+    TrialBaselineObserver interrupted_observer = baseline_backend_for(&interrupted);
+    TrialBaselineResult result = trial_observe_baseline_window(&interrupted_observer, 60);
+    assert(result.status == TRIAL_BASELINE_INTERRUPTED);
+    assert(result.second == 1 && result.samples == 1);
+
+    FakeBaselineObserver wait_failed = {.fail_wait = true};
+    TrialBaselineObserver wait_failed_observer = baseline_backend_for(&wait_failed);
+    result = trial_observe_baseline_window(&wait_failed_observer, 60);
+    assert(result.status == TRIAL_BASELINE_WAIT_FAILED);
+    assert(result.second == 0 && result.samples == 1);
+}
+
 int main(void) {
     direct_trial_success_requires_rpm_and_system_restore();
     direct_trial_restores_both_fans_after_partial_failure();
@@ -308,6 +407,10 @@ int main(void) {
     ftst_check_rejects_nonbaseline_before_first_write();
     ftst_check_rejects_hot_reading_before_first_write();
     baseline_observation_rejects_changed_state();
+    baseline_window_requires_every_sample();
+    baseline_window_catches_delayed_ftst_change();
+    baseline_window_stops_on_read_failure();
+    baseline_window_stops_on_interruption_or_wait_failure();
     puts("trial action tests passed");
     return 0;
 }
