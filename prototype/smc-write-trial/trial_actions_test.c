@@ -15,6 +15,7 @@ typedef struct {
     bool fail_ftst_enable;
     bool apply_ftst_on_error;
     bool delay_ftst_enable;
+    double ftst_enable_delay_seconds;
     bool pending_ftst_enable;
     bool fail_ftst_release;
     bool delay_ftst_release;
@@ -25,6 +26,7 @@ typedef struct {
     bool unexpected_manual_after_unlock;
     bool stop_after_unlock;
     bool high_temperature;
+    bool heat_after_ftst_enable;
     unsigned write_count;
     char writes[512];
     size_t writes_length;
@@ -33,6 +35,7 @@ typedef struct {
     double targets[TRIAL_FAN_COUNT];
     bool restoring;
     bool released_ftst;
+    double ftst_zero_at;
 } MockBackend;
 
 static void append_write(MockBackend *mock, const char *text) {
@@ -80,6 +83,7 @@ static bool mock_write_ftst(void *context, uint8_t value) {
     }
     if (value == 1 && mock->delay_ftst_enable) {
         mock->pending_ftst_enable = true;
+        if (mock->heat_after_ftst_enable) mock->high_temperature = true;
         return true;
     }
     if (value == 0 && mock->fail_ftst_release) return false;
@@ -88,7 +92,10 @@ static bool mock_write_ftst(void *context, uint8_t value) {
         return true;
     }
     mock->ftst = value;
-    if (value == 0) mock->released_ftst = true;
+    if (value == 0) {
+        mock->released_ftst = true;
+        mock->ftst_zero_at = mock->now;
+    }
     if (value == 1 && mock->unexpected_manual_after_unlock) mock->modes[0] = 1;
     return true;
 }
@@ -113,6 +120,7 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
         output->temperatures_c[1] = 50.0;
         output->temperatures_c[2] = 35.0;
     }
+    output->metrics_available = temperatures;
     return true;
 }
 
@@ -124,7 +132,9 @@ static bool mock_wait(void *context, unsigned milliseconds) {
         mock->released_ftst = true;
         mock->ftst = 0;
     }
-    if (mock->pending_ftst_enable && mock->now >= 1.0) {
+    if (mock->pending_ftst_enable &&
+        mock->now >= (mock->ftst_enable_delay_seconds > 0 ?
+                      mock->ftst_enable_delay_seconds : 1.0)) {
         mock->pending_ftst_enable = false;
         mock->ftst = 1;
         mock->modes[0] = 0;
@@ -237,22 +247,64 @@ static void ftst_check_round_trip_does_not_write_fan_keys(void) {
 static void ftst_rejection_leaves_baseline_without_cleanup_writes(void) {
     MockBackend mock = {.modes = {3, 3}, .fail_ftst_enable = true};
     TrialBackend backend = backend_for(&mock);
-    assert(trial_check_ftst(&backend) == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
-    assert(strcmp(mock.writes, "Ftst=1;") == 0);
-}
-
-static void accepted_ftst_with_delayed_effect_never_verifies_immediate_baseline(void) {
-    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true};
-    TrialBackend backend = backend_for(&mock);
     assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
     assert(strcmp(mock.writes, "Ftst=1;") == 0);
+    assert(mock.now >= 70.0);
+}
+
+static void delayed_ftst_effect_is_restored_after_it_becomes_visible(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now >= 61.0);
+}
+
+static void accepted_ftst_with_later_effect_never_verifies_baseline(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 75.0};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
     assert(mock.ftst == 0 && mock.pending_ftst_enable);
-    assert(mock_wait(&mock, 1000));
+    assert(mock_wait(&mock, 5000));
     TrialObservation delayed = {0};
     assert(mock_read(&mock, false, &delayed));
     assert(!trial_observation_is_baseline(&delayed));
     assert(delayed.ftst == 1 && delayed.mode[0] == 0 && delayed.mode[1] == 0);
     assert(delayed.target_rpm[0] == 1350 && delayed.target_rpm[1] == 1458);
+}
+
+static void accepted_ftst_after_explicit_release_triggers_recovery(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 12.0,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void hot_post_write_read_triggers_immediate_release(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 75.0,
+                        .heat_after_ftst_enable = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.ftst_zero_at < 1.0);
+}
+
+static void unseen_ftst_with_failed_explicit_release_is_critical(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 75.0,
+                        .fail_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_RESTORE_FAILED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.pending_ftst_enable);
 }
 
 static void ftst_error_with_changed_readback_still_clears_unlock(void) {
@@ -483,7 +535,11 @@ int main(void) {
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
     ftst_rejection_leaves_baseline_without_cleanup_writes();
-    accepted_ftst_with_delayed_effect_never_verifies_immediate_baseline();
+    delayed_ftst_effect_is_restored_after_it_becomes_visible();
+    accepted_ftst_with_later_effect_never_verifies_baseline();
+    accepted_ftst_after_explicit_release_triggers_recovery();
+    hot_post_write_read_triggers_immediate_release();
+    unseen_ftst_with_failed_explicit_release_is_critical();
     ftst_error_with_changed_readback_still_clears_unlock();
     independent_restore_clears_ftst_after_unchanged_modes();
     interruption_after_unlock_still_restores_ftst();

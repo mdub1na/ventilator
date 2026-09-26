@@ -12,6 +12,7 @@ typedef struct {
     double actual_rpm[TRIAL_FAN_COUNT];
     double target_rpm[TRIAL_FAN_COUNT];
     double temperatures_c[TRIAL_TEMPERATURE_COUNT];
+    bool metrics_available;
 } TrialObservation;
 
 typedef struct {
