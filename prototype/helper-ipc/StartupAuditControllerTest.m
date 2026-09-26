@@ -30,6 +30,12 @@ static SmcBaselineResult failingReader(SmcBaselineSnapshot *snapshot) {
     return SMC_BASELINE_READ_FAILED;
 }
 
+static SmcBaselineResult earlyReader(SmcBaselineSnapshot *snapshot) {
+    SmcBaselineResult result = systemReader(snapshot);
+    snapshot->temperatures_c[1] = -1.95;
+    return result;
+}
+
 int main(void) {
     @autoreleasepool {
         reads = 0;
@@ -66,6 +72,23 @@ int main(void) {
                   failedStatus[@"Ftst"] == nil &&
                   HelperStartupAuditResponseValid(failedStatus),
                   @"failed read must not expose a fabricated baseline");
+
+        reads = 0;
+        StartupAuditController *early = [[StartupAuditController alloc] initWithReader:earlyReader];
+        NSDictionary *earlyStatus = early.status;
+        NSCAssert(reads == 1 && [earlyStatus[@"state"] isEqual:@"system_at_start"] &&
+                  earlyStatus[@"temperatures_c"][1] == [NSNull null] &&
+                  HelperStartupAuditResponseValid(earlyStatus),
+                  @"implausible early GPU reading must be unavailable without hiding fan state");
+        NSMutableDictionary *rawEarly = [earlyStatus mutableCopy];
+        rawEarly[@"temperatures_c"] = @[@50, @(-1.95), @30];
+        NSCAssert(!HelperStartupAuditResponseValid(rawEarly),
+                  @"client must reject the raw implausible temperature");
+        NSData *encoded = [NSJSONSerialization dataWithJSONObject:earlyStatus options:0 error:NULL];
+        NSCAssert(encoded != nil &&
+                  [[[NSString alloc] initWithData:encoded encoding:NSUTF8StringEncoding]
+                      containsString:@"\"temperatures_c\":[50,null,30]"],
+                  @"unavailable temperature must serialize as JSON null");
         puts("startup audit tests passed");
         return 0;
     }

@@ -21,6 +21,10 @@ int main(void) {
         status[@"state"] = @"changed";
         status[@"baseline"] = @NO;
         NSCAssert(HelperWatchResponseValid(status), @"detected change must pass");
+        status[@"temperatures_c"] = @[@50, [NSNull null], @30];
+        NSCAssert(HelperWatchResponseValid(status), @"unavailable temperature must remain distinct");
+        status[@"temperatures_c"] = @[@50, @(-1.95), @30];
+        NSCAssert(!HelperWatchResponseValid(status), @"implausible temperature must fail");
         puts("XPC watch validation tests passed");
         return 0;
     }

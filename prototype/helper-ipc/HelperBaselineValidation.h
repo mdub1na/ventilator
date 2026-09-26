@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#import "HelperTemperatureValue.h"
 #include <math.h>
 
 static inline BOOL HelperBaselineResponseValid(NSDictionary<NSString *, id> *result) {
@@ -31,9 +32,8 @@ static inline BOOL HelperBaselineResponseValid(NSDictionary<NSString *, id> *res
         if (!isfinite(goal) || !isfinite(rpm) || goal < 0 || rpm < 0) return NO;
         baseline = baseline && [mode[index] unsignedIntegerValue] == 3 && fabs(goal) <= 1.0;
     }
-    for (NSNumber *temperature in temperatures) {
-        if (![temperature isKindOfClass:NSNumber.class] ||
-            !isfinite(temperature.doubleValue)) return NO;
+    for (id temperature in temperatures) {
+        if (!HelperTemperatureValueValid(temperature)) return NO;
     }
     return [result[@"baseline"] isEqual:@(baseline)];
 }

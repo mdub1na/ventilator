@@ -1,6 +1,7 @@
 #ifndef VENTILATOR_SMC_BASELINE_READ_H
 #define VENTILATOR_SMC_BASELINE_READ_H
 
+#include <math.h>
 #include <stdbool.h>
 #include <stdint.h>
 
@@ -11,7 +12,7 @@ typedef struct {
     uint8_t mode[2];
     double target_rpm[2];
     double actual_rpm[2];
-    double temperatures_c[3]; // TCMz, Tg0D, TH0a
+    double temperatures_c[3]; // TCMz, Tg0D, TH0a; NAN means unavailable
 } SmcBaselineSnapshot;
 
 typedef enum {
@@ -25,5 +26,9 @@ typedef enum {
 SmcBaselineResult smc_baseline_read(SmcBaselineSnapshot *snapshot);
 bool smc_baseline_is_system(const SmcBaselineSnapshot *snapshot);
 const char *smc_baseline_result_name(SmcBaselineResult result);
+
+static inline bool smc_baseline_temperature_valid(double celsius) {
+    return isfinite(celsius) && celsius >= 10.0 && celsius <= 115.0;
+}
 
 #endif

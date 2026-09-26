@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#import "HelperTemperatureValue.h"
 #include <math.h>
 
 static inline BOOL HelperWatchResponseValid(NSDictionary<NSString *, id> *result) {
@@ -42,9 +43,8 @@ static inline BOOL HelperWatchResponseValid(NSDictionary<NSString *, id> *result
         if (!isfinite(goal) || !isfinite(rpm) || goal < 0 || rpm < 0) return NO;
         baseline = baseline && [mode[index] unsignedIntegerValue] == 3 && fabs(goal) <= 1.0;
     }
-    for (NSNumber *temperature in temperatures) {
-        if (![temperature isKindOfClass:NSNumber.class] ||
-            !isfinite(temperature.doubleValue)) return NO;
+    for (id temperature in temperatures) {
+        if (!HelperTemperatureValueValid(temperature)) return NO;
     }
     if (![result[@"baseline"] isEqual:@(baseline)]) return NO;
     if ([state isEqual:@"running"])

@@ -48,6 +48,13 @@ jobs:
       - uses: actions/checkout@v4
       - run: make -C prototype/smc-write-trial clean build test
 
+  helper-ipc-contract:
+    if: github.event_name == 'push' || github.event_name == 'pull_request'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make -C prototype/helper-ipc baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test
+
   # Separate from the gate, and on a schedule rather than on a pull request, because an anchor rots
   # when somebody refactors a **different** repository. A pull request here is the least likely
   # moment for one to break, and running it there trains people to ignore a red build they did not
