@@ -30,6 +30,7 @@ make -C prototype/smc-read build
 make -C prototype/menu-bar build
 make -C prototype/login-item build
 make -C prototype/smc-write-trial clean build test
+make -C prototype/helper-ipc smoke
 ```
 
 Сборка и тесты `smc-write-trial` не требуют записи в SMC. Не запускайте его команды `--apply` как обычную проверку PR. Новые аппаратные пробы заблокированы после [случая с `Ftst`](docs/features/ftst-check-trial.md); прямая проба и её исходный допуск записаны в [отдельном протоколе](docs/features/manual-fan-control-trial.md). Команды восстановления остаются аварийными и не входят в тесты.
@@ -39,6 +40,8 @@ make -C prototype/smc-write-trial clean build test
 Если меняли Kotlin/Native IOKit пробу, выполните `gradle linkDebugExecutableMacosArm64` из `prototype/kotlin-native-iokit/` на Apple Silicon Mac. Для подтверждения доступа к AppleSMC запустите собранный `iokit-smoke.kexe` вне песочницы и укажите результат в PR.
 
 GitHub Actions сейчас запускает проверку документации. Сборки macOS и аппаратные сценарии в этом workflow ещё не автоматизированы, поэтому их результат надо записывать в PR.
+
+`prototype/helper-ipc` запускает лишь временную пользовательскую XPC-службу. Проба требует доступа к пользовательскому `launchctl`, не обращается к SMC и проверяет удаление службы после запроса. При сообщении `CRITICAL` проверьте напечатанное имя службы и сохранённый plist до повторного запуска.
 
 ## Безопасность аппаратных проверок и данных
 
