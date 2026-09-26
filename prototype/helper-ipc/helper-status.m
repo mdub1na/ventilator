@@ -115,10 +115,25 @@ static BOOL validCDHash(const char *hash) {
     return YES;
 }
 
+static BOOL validTeamID(const char *team) {
+    if (strlen(team) != 10) return NO;
+    for (size_t index = 0; index < 10; ++index) {
+        if (!isalnum((unsigned char)team[index])) return NO;
+    }
+    return YES;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc == 4 && strcmp(argv[1], "request-signed") == 0 && validTeamID(argv[3])) {
+            NSString *requirement = [NSString stringWithFormat:
+                @"anchor apple generic and identifier \"com.ventilator.helper-ipc.signed-daemon\" and certificate leaf[subject.OU] = \"%s\"",
+                argv[3]];
+            return request([NSString stringWithUTF8String:argv[2]], requirement);
+        }
         if (argc != 4 || !validCDHash(argv[3])) {
-            fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME EXPECTED_PEER_CDHASH\n", argv[0]);
+            fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME EXPECTED_PEER_CDHASH\n"
+                    "   or: %s request-signed MACH_SERVICE_NAME EXPECTED_DAEMON_TEAM_ID\n", argv[0], argv[0]);
             return 2;
         }
         NSString *serviceName = [NSString stringWithUTF8String:argv[2]];
