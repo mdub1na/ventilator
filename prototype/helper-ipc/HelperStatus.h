@@ -4,6 +4,7 @@
 @protocol HelperStatusXPC
 - (void)fetchStatusWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
 - (void)fetchBaselineWithReply:(void (^)(NSDictionary<NSString *, id> *snapshot))reply;
+- (void)fetchStartupAuditWithReply:(void (^)(NSDictionary<NSString *, id> *audit))reply;
 - (void)startBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
 - (void)fetchBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
 @end

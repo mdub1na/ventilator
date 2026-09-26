@@ -21,6 +21,11 @@
             @"available": @NO, @"reason": @"unsupported_provider"});
 }
 
+- (void)fetchStartupAuditWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
+            @"state": @"unsupported_provider"});
+}
+
 - (void)startBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
     reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
             @"state": @"unsupported_provider"});
