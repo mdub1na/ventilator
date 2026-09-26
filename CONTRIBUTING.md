@@ -31,6 +31,7 @@ make -C prototype/menu-bar build
 make -C prototype/login-item build
 make -C prototype/smc-write-trial clean build test
 make -C prototype/helper-ipc smoke
+make -C prototype/helper-ipc package-smoke
 ```
 
 Сборка и тесты `smc-write-trial` не требуют записи в SMC. Не запускайте его команды `--apply` как обычную проверку PR. Новые аппаратные пробы заблокированы после [случая с `Ftst`](docs/features/ftst-check-trial.md); прямая проба и её исходный допуск записаны в [отдельном протоколе](docs/features/manual-fan-control-trial.md). Команды восстановления остаются аварийными и не входят в тесты.
@@ -42,6 +43,8 @@ make -C prototype/helper-ipc smoke
 GitHub Actions сейчас запускает проверку документации. Сборки macOS и аппаратные сценарии в этом workflow ещё не автоматизированы, поэтому их результат надо записывать в PR.
 
 `prototype/helper-ipc` запускает лишь временные пользовательские XPC-службы из ad hoc подписанных копий. Проба требует доступа к пользовательскому `launchctl`, не обращается к SMC, проверяет двусторонний отказ по несовпадающему `cdhash` и удаление обеих служб. При сообщении `CRITICAL` проверьте напечатанное имя службы и сохранённый plist до повторного запуска. Эта проба не подтверждает доверенную подпись будущего привилегированного helper.
+
+`package-smoke` отдельно создаёт временный тестовый `.app`, регистрирует и отменяет пользовательский LaunchAgent через `SMAppService.agent`. При ошибке он сохраняет пакет для проверки; пока `unregister` и отсутствие службы не подтверждены, не удаляйте его вручную. Этот тест не меняет `Ventilator.app` и не регистрирует LaunchDaemon.
 
 ## Безопасность аппаратных проверок и данных
 

@@ -23,12 +23,15 @@ tags: [macos, xpc, safety]
 3. Smoke-проба регистрирует отдельный пользовательский Mach service во временном plist и удаляет его через `launchctl bootout`. Она не регистрирует LaunchDaemon из приложения и не требует `sudo`.
 4. Если удаление временной службы не подтверждено, скрипт завершает работу с ошибкой и сохраняет plist для проверки. Такой результат нельзя считать успешной пробой.
 5. Во второй smoke-пробе обе стороны XPC требуют точный `cdhash` противоположного бинарника. Это проверяет механизм отклонения другого кода в текущем запуске, но не удостоверяет автора: исходный ad hoc бинарник можно скопировать. Сервер по-прежнему не запускается с правами root.
+6. Упаковочная проба создаёт отдельный временный `.app` с read-only бинарником и plist пользовательского LaunchAgent. `SMAppService.agent` вызывается только из этого тестового пакета. Скрипт удаляет пакет лишь после `unregister`, статуса `notRegistered` и отсутствия службы в `launchctl`; основное `Ventilator.app` он не меняет.
 
 ## 3. Проверка на устройстве
 
 На `Mac15,7`, macOS 27.0, `make -C prototype/helper-ipc smoke` собрал Objective-C бинарник и выполнил XPC запрос от отдельного процесса. Ответ: `{"protocol_version":1,"smc_access":false,"state":"read_only_prototype","write_available":false}`. `launchctl print` после `bootout` не нашёл временную службу. Доступ к SMC и привилегии администратора не использовались. Внутри песочницы Codex `launchctl bootstrap` вернул ошибку 5; проверка прошла с разрешённым пользовательским запуском среды.
 
 Повторная проверка подписала две временные копии ad hoc с разными `cdhash`. Доверенная пара дважды получила статус. Копия с другим хешем получила XPC ошибку `4097`; delegate доверенного сервиса не принял её соединение, а доверенная пара после отказа продолжила работать. Доверенный клиент отказался принимать другую копию сервиса с XPC ошибкой подписи `4102`. Обе временные службы были удалены с проверкой отсутствия в `launchctl print`. Локальный `security find-identity -v -p codesigning` показал `0 valid identities found`; Team ID этим тестом не проверен.
+
+`make -C prototype/helper-ipc package-smoke` на том же Mac создал `HelperProbe.app` с `Contents/Resources/helper-status` и plist `com.ventilator.helper-ipc.package-test.plist` в `Contents/Library/LaunchAgents`. `plutil` и `codesign --verify --strict` прошли. До регистрации `SMAppService.status` был `notFound`; после `register` — `enabled`. Отдельный XPC клиент получил фиксированный статус. `unregister` вернул `notRegistered`, `launchctl print` не обнаружил службу, после чего временный пакет был удалён. Root, SMC и основной `Ventilator.app` не участвовали. Дополнительный запрос `sfltool dumpbtm` завис и был остановлен; отсутствие исторической записи в системном списке фоновых объектов этим тестом не подтверждено.
 
 ## 4. Сценарии
 
@@ -56,9 +59,15 @@ tags: [macos, xpc, safety]
 * **Then:** запрос завершается XPC ошибкой подписи `4102` без принятого статуса.
 * **Manual:** `make -C prototype/helper-ipc smoke` на `Mac15,7`/macOS 27.0, §3.
 
+### Scenario: Временный пакет регистрирует и удаляет LaunchAgent
+* **Given:** ad hoc подписанный тестовый `.app` содержит helper и plist с `BundleProgram`.
+* **When:** пакет вызывает `SMAppService.agent.register`, клиент запрашивает статус, затем пакет вызывает `unregister`.
+* **Then:** между вызовами статус `enabled` и XPC отвечает; в конце статус `notRegistered`, службы в `launchctl` нет, пакет удаляется.
+* **Manual:** `make -C prototype/helper-ipc package-smoke` на `Mac15,7`/macOS 27.0, §3.
+
 ## 5. Граница результата
 
-В этом этапе есть только проверка точного кода ad hoc подписанных копий, без доверенного сертификата, Team ID, `SMAppService.daemon`, установки LaunchDaemon, JNI-моста, чтения SMC или управления вентиляторами. Даже успешный XPC ответ не закрывает M2-02: проверка подлинности клиента по доверенному подписанту, жизненного цикла и аппаратного восстановления остаётся открытой. [Исследование границы](../research/research-helper-boundary.md) описывает порядок следующих проверок.
+В этом этапе есть проверка точного кода ad hoc подписанных копий и упаковки отдельного пользовательского тестового приложения, без доверенного сертификата, Team ID, интеграции с `Ventilator.app`, `SMAppService.daemon`, установки LaunchDaemon, JNI-моста, чтения SMC или управления вентиляторами. Даже успешный XPC ответ не закрывает M2-02: проверка подлинности клиента по доверенному подписанту, жизненного цикла привилегированного процесса и аппаратного восстановления остаётся открытой. [Исследование границы](../research/research-helper-boundary.md) описывает порядок следующих проверок.
 
 ## 6. Code anchors
 
@@ -68,3 +77,4 @@ tags: [macos, xpc, safety]
 | Listener и клиент | `prototype/helper-ipc/helper-status.m` |
 | Временная регистрация и удаление | `prototype/helper-ipc/smoke.sh` |
 | Сборка | `prototype/helper-ipc/Makefile` |
+| Тестовый пакет и регистрация LaunchAgent | `prototype/helper-ipc/package-smoke.sh`, `prototype/helper-ipc/agent-registration.m` |
