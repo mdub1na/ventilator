@@ -2,3 +2,4 @@
 /agent-registration
 /daemon-status
 /daemon-registration
+/libhelper-probe.dylib

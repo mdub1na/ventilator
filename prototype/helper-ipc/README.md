@@ -23,3 +23,15 @@ cd prototype/helper-ipc
 ```
 
 If `register` reports `Operation not permitted` and `status` says `requiresApproval`, approve the test background item in macOS System Settings, then run `status` and `check`. The app must stay in place until `unregister` verifies `notRegistered` and absence from `launchctl print system/com.ventilator.helper-ipc.signed-daemon-test`; `cleanup` enforces this. `check` accepts the expected signed client, rejects both an ad hoc client and a client with the same Team ID but another identifier, and confirms the system service. The daemon provides only the fixed status method, despite running as root. Its successful local probe does not establish a safe SMC control path.
+
+For the main-app integration probe, run `./integrated-probe.sh prepare` from this directory. It builds a separate Apple Development signed copy of the real Compose `Ventilator.app`, embeds the same read-only daemon and a LaunchDaemon plist, then prints `prepared=...`. The app's own JVM process loads `libhelper-probe.dylib` and provides these manual commands:
+
+```sh
+./integrated-probe.sh status "$APP"
+./integrated-probe.sh register "$APP"
+./integrated-probe.sh check "$APP"
+./integrated-probe.sh unregister "$APP"
+./integrated-probe.sh cleanup "$APP"
+```
+
+If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.

@@ -1,8 +1,6 @@
 #import "HelperStatus.h"
 #include <ctype.h>
 
-static NSString *const ClientIdentifier = @"com.ventilator.helper-ipc.signed-client";
-
 @interface DaemonStatus : NSObject <HelperStatusXPC>
 @end
 
@@ -59,16 +57,21 @@ static BOOL validTeamID(const char *team) {
     return YES;
 }
 
+static BOOL validClientIdentifier(const char *identifier) {
+    return strcmp(identifier, "com.ventilator.helper-ipc.signed-client") == 0 ||
+        strcmp(identifier, "ventilator.desktop") == 0;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        if (argc != 3 || !validTeamID(argv[2])) {
-            fprintf(stderr, "Usage: %s MACH_SERVICE_NAME EXPECTED_CLIENT_TEAM_ID\n", argv[0]);
+        if (argc != 4 || !validTeamID(argv[2]) || !validClientIdentifier(argv[3])) {
+            fprintf(stderr, "Usage: %s MACH_SERVICE_NAME EXPECTED_CLIENT_TEAM_ID EXPECTED_CLIENT_IDENTIFIER\n", argv[0]);
             return 2;
         }
         NSString *serviceName = [NSString stringWithUTF8String:argv[1]];
         NSString *requirement = [NSString stringWithFormat:
-            @"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%s\"",
-            ClientIdentifier, argv[2]];
+            @"anchor apple generic and identifier \"%s\" and certificate leaf[subject.OU] = \"%s\"",
+            argv[3], argv[2]];
         NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:serviceName];
         DaemonListener *delegate = [DaemonListener new];
         listener.delegate = delegate;
