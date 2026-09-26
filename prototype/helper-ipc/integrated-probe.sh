@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | startup-audit-crash-run APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | check APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -72,10 +72,19 @@ valid_identity() {
 }
 
 prepare() {
-    [ "$#" -eq 0 ] || usage
+    [ "$#" -eq 1 ] || usage
+    case "$1" in
+        temporary) probe_root=${TMPDIR:-/tmp} ;;
+        persistent)
+            probe_root=$PWD/.reboot-probes
+            mkdir -p "$probe_root"
+            chmod 700 "$probe_root"
+            ;;
+        *) usage ;;
+    esac
     (cd ../desktop-app && gradle createDistributable -Pcompose.desktop.packaging.checkJdkVendor=false)
     make daemon-status helper-status libhelper-probe.dylib
-    scratch=$(mktemp -d "${TMPDIR:-/tmp}/ventilator-integrated-probe.XXXXXX")
+    scratch=$(mktemp -d "$probe_root/ventilator-integrated-probe.XXXXXX")
     chmod 700 "$scratch"
     app="$scratch/Ventilator.app"
     trap 'echo "incomplete probe retained: $scratch" >&2' EXIT HUP INT TERM
@@ -127,7 +136,8 @@ EOF
 action=$1
 shift
 case "$action" in
-    prepare) prepare "$@" ;;
+    prepare) [ "$#" -eq 0 ] || usage; prepare temporary ;;
+    prepare-reboot) [ "$#" -eq 0 ] || usage; prepare persistent ;;
     status)
         require_app "$@"
         echo "registration=$(ventilator --helper-registration-status)"
@@ -209,6 +219,50 @@ case "$action" in
         done
         echo "new daemon did not answer with a later startup audit" >&2
         exit 1
+        ;;
+    reboot-before)
+        require_app "$@"
+        case "$app" in "$PWD/.reboot-probes/"*) ;; *) echo "reboot probe must use prepare-reboot" >&2; exit 1 ;; esac
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        marker="$app/../.reboot-baseline"
+        [ ! -e "$marker" ] || { echo "reboot baseline already exists" >&2; exit 1; }
+        audit=$(ventilator --helper-startup-audit)
+        before=$(running_root_pid) || { echo "root daemon did not start" >&2; exit 1; }
+        case "$audit" in *"\"daemon_pid\":$before"* ) ;; *) echo "startup audit PID differs: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"state":"system_at_start"'* ) ;; *) echo "startup audit is not system: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"control_allowed":false'* ) ;; *) echo "startup audit authorizes control: $audit" >&2; exit 1 ;; esac
+        boot=$(boot_epoch)
+        sampled_at=$(printf '%s\n' "$audit" | sed -n 's/.*"sample_monotonic_ns":\([0-9][0-9]*\).*/\1/p')
+        is_uint "$boot" && is_uint "$sampled_at" || { echo "boot or sample time missing" >&2; exit 1; }
+        printf '%s %s %s\n' "$boot" "$before" "$sampled_at" >"$marker"
+        echo "reboot-audit-before=$audit"
+        echo "reboot-baseline-recorded boot=$boot daemon-pid=$before; reboot Mac, then run reboot-after"
+        ;;
+    reboot-after)
+        require_app "$@"
+        marker="$app/../.reboot-baseline"
+        [ -f "$marker" ] || { echo "run reboot-before first" >&2; exit 1; }
+        read -r before_boot before_pid before_sample <"$marker"
+        boot=$(boot_epoch)
+        is_uint "$before_boot" && is_uint "$before_pid" && is_uint "$before_sample" && is_uint "$boot" || {
+            echo "invalid reboot baseline or boot time" >&2
+            exit 1
+        }
+        [ "$boot" -gt "$before_boot" ] || { echo "Mac has not rebooted since reboot-before" >&2; exit 1; }
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is no longer enabled" >&2; exit 1; }
+        audit=$(ventilator --helper-startup-audit)
+        after=$(running_root_pid) || { echo "root daemon did not start after reboot" >&2; exit 1; }
+        case "$audit" in *"\"daemon_pid\":$after"* ) ;; *) echo "new startup audit PID differs: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"state":"system_at_start"'* ) ;; *) echo "new startup audit is not system: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"control_allowed":false'* ) ;; *) echo "new startup audit authorizes control: $audit" >&2; exit 1 ;; esac
+        sampled_at=$(printf '%s\n' "$audit" | sed -n 's/.*"sample_monotonic_ns":\([0-9][0-9]*\).*/\1/p')
+        is_uint "$sampled_at" && [ "$sampled_at" -gt 0 ] || { echo "new startup sample time missing" >&2; exit 1; }
+        baseline=$(ventilator --helper-baseline)
+        case "$baseline" in *'"available":true'*'"baseline":true'* ) ;; *) echo "fresh root baseline is not system: $baseline" >&2; exit 1 ;; esac
+        rm "$marker"
+        echo "reboot-audit-after=$audit"
+        echo "reboot-baseline-after=$baseline"
+        echo "reboot-audit=verified old-boot=$before_boot new-boot=$boot old-pid=$before_pid new-pid=$after uid=0"
         ;;
     watch)
         require_app "$@"
@@ -425,6 +479,7 @@ case "$action" in
         service_absent || { echo "system service still present" >&2; exit 1; }
         scratch=$(dirname "$app")
         rm -rf "$scratch"
+        case "$scratch" in "$PWD/.reboot-probes/"*) rmdir "$PWD/.reboot-probes" 2>/dev/null || true ;; esac
         echo "probe package removed"
         ;;
     *) usage ;;
