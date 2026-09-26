@@ -53,6 +53,8 @@ tags: [macos, xpc, safety]
 
 Новый reader `SmcBaselineRead.c` на `Mac15,7`/macOS 27.0 прочитал фиксированные ключи без `sudo`: `Ftst=0`, режимы `[3,3]`, цели `[0,0]`, фактические RPM `[0,0]`, температуры `TCMz=55,48`, `Tg0D=47,04`, `TH0a=32,42 °C`. В песочнице открытие AppleSMC отказало; при разрешённом read-only доступе тот же бинарник прошёл. Временный Apple Development подписанный daemon в пользовательском домене через `fetchBaselineWithReply` вернул `available=true`, `baseline=true` и те же режимы/цели; статус сообщил `smc_access=true`, `write_available=false`. Ad hoc и другой подписанный клиент были отклонены. Временная служба и пакет удалены. Это проверка signed XPC и чтения, не проверка root-процесса и не восстановление после записи.
 
+Затем свежая временная подписанная копия `Ventilator.app` на том же `Mac15,7`/macOS 27.0 проверила новый метод из UID 0 daemon. До разрешения macOS `--helper-baseline` завершилась ошибкой связи. После включения фоновой активности первая регистрация вернула `requiresApproval`; `unregister`, пауза и повторный `register` дали `enabled`. `integrated-probe.sh check` получил из главного JVM-процесса статус `smc_access=true`, `write_available=false` и снимок `available=true`, `baseline=true`: `Ftst=0`, режимы `[3,3]`, цели `[0,0]`, фактические RPM `[0,0]`, `TCMz=56,81`, `Tg0D=50,46`, `TH0a=32,86 °C`. Подписанный клиент с другим identifier и ad hoc клиент отклонены; процесс daemon имел UID 0. `unregister` подтвердил `notRegistered` и отсутствие системной службы, временный пакет удалён, переключатель фоновой активности возвращён в «выкл.». Записи SMC не было. Один последовательный снимок не доказывает устойчивое восстановление после записи.
+
 ## 4. Сценарии
 
 ### Scenario: Клиент получает фиксированный статус
@@ -66,7 +68,7 @@ tags: [macos, xpc, safety]
 * **When:** доверенный клиент вызывает `fetchBaselineWithReply` без параметров.
 * **Then:** ответ содержит `available=true`, два режима и две цели, а `baseline=true` соответствует `Ftst=0`, режимам `[3,3]` и нулевым целям; чужие клиенты отклонены.
 * **Automated:** `prototype/helper-ipc/SmcBaselineReadTest.c` проверяет критерий baseline без SMC; `prototype/helper-ipc/HelperBaselineValidationTest.m` отклоняет ложное `baseline=true` с ненулевыми целями.
-* **Manual:** `SmcBaselineReadTest --live` и `signed-ipc-smoke.sh` на указанной модели/ОС, §3. Проверка UID 0 через временный `Ventilator.app` ещё не проведена.
+* **Manual:** `SmcBaselineReadTest --live`, `signed-ipc-smoke.sh` и `integrated-probe.sh prepare/register/check/unregister/cleanup` на указанной модели/ОС, §3. Последняя проба подтвердила чтение из UID 0 daemon через главное приложение.
 
 ### Scenario: Служба не отвечает
 * **Given:** соединение недоступно или ответ не пришёл в течение 5 секунд.
