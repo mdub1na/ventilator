@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | check APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -74,9 +74,10 @@ valid_identity() {
 prepare() {
     [ "$#" -eq 1 ] || usage
     case "$1" in
-        temporary) probe_root=${TMPDIR:-/tmp} ;;
+        temporary) probe_root=${TMPDIR:-/tmp}; run_at_load_plist= ;;
         persistent)
             probe_root=$PWD/.reboot-probes
+            run_at_load_plist='  <key>RunAtLoad</key><true/>'
             mkdir -p "$probe_root"
             chmod 700 "$probe_root"
             ;;
@@ -109,6 +110,7 @@ prepare() {
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
   <key>Label</key><string>$service</string>
+$run_at_load_plist
   <key>AssociatedBundleIdentifiers</key><string>ventilator.desktop</string>
   <key>BundleProgram</key><string>Contents/Resources/daemon-status</string>
   <key>ProgramArguments</key><array>
@@ -149,6 +151,17 @@ case "$action" in
         [ "$before" = notRegistered ] || [ "$before" = notFound ] || { echo "unexpected pre-registration status: $before" >&2; exit 1; }
         service_absent || { echo "system/$service is already present" >&2; exit 1; }
         ventilator --helper-register
+        ;;
+    eager-check)
+        require_app "$@"
+        before=$(running_root_pid) || { echo "root daemon is not running before XPC request" >&2; exit 1; }
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        audit=$(ventilator --helper-startup-audit)
+        case "$audit" in *"\"daemon_pid\":$before"* ) ;; *) echo "startup audit PID differs: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"state":"system_at_start"'* ) ;; *) echo "startup audit is not system: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"control_allowed":false'* ) ;; *) echo "startup audit authorizes control: $audit" >&2; exit 1 ;; esac
+        echo "eager-startup=verified uid=0 pid=$before"
+        echo "eager-startup-audit=$audit"
         ;;
     check)
         require_app "$@"
@@ -249,9 +262,9 @@ case "$action" in
             exit 1
         }
         [ "$boot" -gt "$before_boot" ] || { echo "Mac has not rebooted since reboot-before" >&2; exit 1; }
+        after=$(running_root_pid) || { echo "root daemon did not start before the first XPC request after reboot" >&2; exit 1; }
         [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is no longer enabled" >&2; exit 1; }
         audit=$(ventilator --helper-startup-audit)
-        after=$(running_root_pid) || { echo "root daemon did not start after reboot" >&2; exit 1; }
         case "$audit" in *"\"daemon_pid\":$after"* ) ;; *) echo "new startup audit PID differs: $audit" >&2; exit 1 ;; esac
         case "$audit" in *'"state":"system_at_start"'* ) ;; *) echo "new startup audit is not system: $audit" >&2; exit 1 ;; esac
         case "$audit" in *'"control_allowed":false'* ) ;; *) echo "new startup audit authorizes control: $audit" >&2; exit 1 ;; esac
