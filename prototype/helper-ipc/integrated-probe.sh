@@ -479,6 +479,7 @@ case "$action" in
         service_absent || { echo "system service still present" >&2; exit 1; }
         scratch=$(dirname "$app")
         rm -rf "$scratch"
+        case "$scratch" in "$PWD/.reboot-probes/"*) rmdir "$PWD/.reboot-probes" 2>/dev/null || true ;; esac
         echo "probe package removed"
         ;;
     *) usage ;;
