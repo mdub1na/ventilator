@@ -24,7 +24,7 @@ typedef enum {
     CONTROL_LEASE_READ_FAILED,
 } ControlLeaseState;
 
-typedef struct {
+typedef struct ControlLease {
     ControlLeaseState state;
     uint64_t owner;
     uint64_t expires_at_ns;
@@ -32,6 +32,7 @@ typedef struct {
     uint64_t last_sample_ns;
     unsigned samples;
     bool write_pending;
+    bool recovery_verified;
 } ControlLease;
 
 // This reducer has no SMC writer and is not linked into the read-only daemon.
@@ -47,6 +48,8 @@ bool control_lease_claim(ControlLease *lease, uint64_t owner, uint64_t now_ns,
                          const SmcBaselineSnapshot *snapshot);
 bool control_lease_mark_write_pending(ControlLease *lease, uint64_t owner,
                                       uint64_t now_ns, ControlIntentStatus intent);
+// Invalidates any old recovery proof before a new persistent intent is made.
+bool control_lease_prepare_persistent_intent(ControlLease *lease);
 bool control_lease_renew(ControlLease *lease, uint64_t owner, uint64_t now_ns,
                          ControlIntentStatus intent, SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot);
@@ -56,6 +59,8 @@ void control_lease_sleep(ControlLease *lease);
 void control_lease_recovery_started(ControlLease *lease, SmcBaselineResult result,
                                     const SmcBaselineSnapshot *snapshot,
                                     uint64_t now_ns);
+// A one-use simulated proof for clearing a persistent intent marker.
+bool control_lease_take_recovery_proof(ControlLease *lease);
 const char *control_lease_state_name(ControlLeaseState state);
 
 #endif

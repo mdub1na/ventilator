@@ -31,6 +31,28 @@ static void finish_window(ControlLease *lease, const SmcBaselineSnapshot *snapsh
     }
 }
 
+static ControlLease held_lease(const SmcBaselineSnapshot *baseline) {
+    ControlLease lease = {0};
+    control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK,
+                        baseline, SECOND);
+    finish_window(&lease, baseline, SECOND);
+    assert(lease.state == CONTROL_LEASE_STABLE && !lease.recovery_verified);
+    assert(control_lease_claim(&lease, 7, 61 * SECOND, true,
+                               CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, baseline));
+    return lease;
+}
+
+static ControlLease verified_recovery(const SmcBaselineSnapshot *baseline) {
+    ControlLease lease = {0};
+    control_lease_start(&lease, CONTROL_INTENT_PENDING, SMC_BASELINE_OK,
+                        baseline, SECOND);
+    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
+    control_lease_recovery_started(&lease, SMC_BASELINE_OK, baseline, 2 * SECOND);
+    finish_window(&lease, baseline, 2 * SECOND);
+    assert(lease.state == CONTROL_LEASE_STABLE && lease.recovery_verified);
+    return lease;
+}
+
 int main(void) {
     char directory[] = "/private/tmp/ventilator-intent-test.XXXXXX";
     assert(mkdtemp(directory) != NULL);
@@ -38,12 +60,19 @@ int main(void) {
     assert(dir >= 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_CLEAR);
     assert(control_intent_read(-1) == CONTROL_INTENT_UNKNOWN);
-    assert(control_intent_mark_pending(dir));
+    SmcBaselineSnapshot baseline = baseline_snapshot();
+    ControlLease first = held_lease(&baseline);
+    assert(!control_intent_clear_verified(dir, &first));
+    assert(!control_intent_mark_pending(dir, NULL));
+    assert(control_intent_mark_pending(dir, &first));
+    assert(control_lease_mark_write_pending(&first, 7, 61 * SECOND,
+                                            CONTROL_INTENT_PENDING));
     assert(control_intent_read(dir) == CONTROL_INTENT_PENDING);
-    assert(!control_intent_mark_pending(dir));
+    ControlLease other = held_lease(&baseline);
+    assert(!control_intent_mark_pending(dir, &other));
     assert(close(dir) == 0);
 
-    // A fresh process would reopen the directory; no in-memory flag is used.
+    // A different process reads the marker without inheriting lease memory.
     dir = open(directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
     assert(dir >= 0);
     pid_t child = fork();
@@ -58,46 +87,59 @@ int main(void) {
     ControlIntentStatus intent = control_intent_read(dir);
     assert(intent == CONTROL_INTENT_PENDING);
     ControlLease lease = {0};
-    SmcBaselineSnapshot baseline = baseline_snapshot();
     control_lease_start(&lease, intent, SMC_BASELINE_OK, &baseline, SECOND);
     assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
+    assert(!control_intent_clear_verified(dir, &lease));
     control_lease_recovery_started(&lease, SMC_BASELINE_OK, &baseline, 2 * SECOND);
-    finish_window(&lease, &baseline, 2 * SECOND);
-    assert(lease.state == CONTROL_LEASE_STABLE);
-    assert(!control_lease_claim(&lease, 7, 62 * SECOND, true,
+    control_lease_sample(&lease, SMC_BASELINE_OK, &baseline, 3 * SECOND);
+    assert(!control_intent_clear_verified(dir, &lease));
+    // The full helper starts at second 2; repeat only the remaining samples.
+    for (unsigned second = 2; second < CONTROL_LEASE_REQUIRED_SAMPLES; ++second) {
+        control_lease_sample(&lease, SMC_BASELINE_OK, &baseline,
+                             2 * SECOND + second * SECOND);
+    }
+    assert(lease.state == CONTROL_LEASE_STABLE && lease.recovery_verified);
+    ControlLease denied = lease;
+    assert(!control_lease_claim(&denied, 7, 62 * SECOND, true,
                                 control_intent_read(dir), SMC_BASELINE_OK, &baseline));
-    assert(lease.state == CONTROL_LEASE_RECOVERY_REQUIRED);
-    assert(control_intent_clear_verified(dir));
+    assert(denied.state == CONTROL_LEASE_RECOVERY_REQUIRED);
+    assert(!control_intent_clear_verified(dir, &denied));
+    assert(control_intent_clear_verified(dir, &lease));
+    assert(!lease.recovery_verified);
     assert(control_intent_read(dir) == CONTROL_INTENT_CLEAR);
-    control_lease_recovery_started(&lease, SMC_BASELINE_OK, &baseline, 63 * SECOND);
-    finish_window(&lease, &baseline, 63 * SECOND);
-    assert(control_lease_claim(&lease, 7, 123 * SECOND, true,
+    assert(control_lease_claim(&lease, 7, 62 * SECOND, true,
                                control_intent_read(dir), SMC_BASELINE_OK, &baseline));
 
-    assert(control_intent_mark_pending(dir));
+    assert(control_intent_mark_pending(dir, &lease));
+    assert(!control_intent_clear_verified(dir, &lease));
     assert(fchmodat(dir, marker_name, 0644, 0) == 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_UNKNOWN);
-    assert(!control_intent_clear_verified(dir));
+    ControlLease proof = verified_recovery(&baseline);
+    assert(!control_intent_clear_verified(dir, &proof));
     assert(fchmodat(dir, marker_name, 0600, 0) == 0);
-    assert(control_intent_clear_verified(dir));
+    assert(control_intent_clear_verified(dir, &proof));
+    assert(!control_intent_clear_verified(dir, &proof));
 
     int malformed = openat(dir, marker_name, O_WRONLY | O_CREAT | O_EXCL, 0600);
     assert(malformed >= 0);
     assert(write(malformed, "bad", 3) == 3);
     assert(close(malformed) == 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_UNKNOWN);
-    assert(!control_intent_mark_pending(dir));
-    assert(!control_intent_clear_verified(dir));
+    ControlLease bad = held_lease(&baseline);
+    assert(!control_intent_mark_pending(dir, &bad));
+    assert(!control_intent_clear_verified(dir, &bad));
     assert(unlinkat(dir, marker_name, 0) == 0);
 
     assert(symlinkat("/etc/passwd", dir, marker_name) == 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_UNKNOWN);
-    assert(!control_intent_mark_pending(dir));
+    bad = held_lease(&baseline);
+    assert(!control_intent_mark_pending(dir, &bad));
     assert(unlinkat(dir, marker_name, 0) == 0);
 
     assert(fchmod(dir, 0777) == 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_UNKNOWN);
-    assert(!control_intent_mark_pending(dir));
+    bad = held_lease(&baseline);
+    assert(!control_intent_mark_pending(dir, &bad));
     assert(fchmod(dir, 0700) == 0);
     assert(control_intent_read(dir) == CONTROL_INTENT_CLEAR);
     assert(close(dir) == 0);
