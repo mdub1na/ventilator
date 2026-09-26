@@ -12,6 +12,7 @@ enum {
     FTST_RELEASE_WAIT_SECONDS = 10,
     FTST_BASELINE_WAIT_SECONDS = 90,
     FTST_BASELINE_STABLE_SECONDS = 60,
+    FTST_EFFECT_WAIT_HALF_SECONDS = 20,
 };
 
 static bool retry_mode(TrialBackend *backend, unsigned fan, uint8_t mode) {
@@ -160,6 +161,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
         }
     }
     if (!read_ok) return false;
+    if (backend->record_observation != NULL) {
+        backend->record_observation(backend->context, 0, &current);
+    }
     if (trial_observation_is_baseline(&current)) return true;
     if (current.ftst == 0) return trial_restore_system(backend);
     if (current.ftst != 1) return false;
@@ -173,6 +177,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
     }
     if (!backend->read_observation(backend->context, false, &current) ||
         current.ftst != 1 || !modes_released(&current)) return false;
+    if (backend->record_observation != NULL) {
+        backend->record_observation(backend->context, 0, &current);
+    }
 
     bool ftst_cleared = false;
     for (unsigned attempt = 0; attempt < FTST_RELEASE_RETRIES && !ftst_cleared; ++attempt) {
@@ -181,6 +188,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
             TrialObservation after_write = {0};
             if (!backend->read_observation(backend->context, false, &after_write) ||
                 !modes_released(&after_write)) return false;
+            if (backend->record_observation != NULL) {
+                backend->record_observation(backend->context, second, &after_write);
+            }
             if (after_write.ftst == 0) {
                 ftst_cleared = true;
                 break;
@@ -198,6 +208,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
         TrialObservation observation = {0};
         if (!backend->read_observation(backend->context, false, &observation) ||
             observation.ftst != 0 || !modes_released(&observation)) return false;
+        if (backend->record_observation != NULL) {
+            backend->record_observation(backend->context, second, &observation);
+        }
         stable_seconds = trial_observation_is_baseline(&observation) ?
                          stable_seconds + 1 : 0;
         if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return true;
@@ -205,6 +218,45 @@ bool trial_restore_unlock(TrialBackend *backend) {
             !backend->wait_milliseconds(backend->context, 1000)) return false;
     }
     return false;
+}
+
+typedef struct {
+    TrialBackend *backend;
+} TrialBackendObserverContext;
+
+static bool trial_backend_observer_read(void *context, TrialObservation *output) {
+    TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
+    return backend->read_observation(backend->context, false, output);
+}
+
+static bool trial_backend_observer_wait(void *context, unsigned milliseconds) {
+    TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
+    return backend->wait_milliseconds(backend->context, milliseconds);
+}
+
+static bool trial_backend_observer_stopped(void *context) {
+    TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
+    return backend->should_stop(backend->context);
+}
+
+static void trial_backend_observer_record(
+    void *context, unsigned second, const TrialObservation *observation) {
+    TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
+    if (backend->record_observation != NULL) {
+        backend->record_observation(backend->context, second, observation);
+    }
+}
+
+static TrialBaselineResult trial_observe_after_ftst(TrialBackend *backend) {
+    TrialBackendObserverContext context = {.backend = backend};
+    TrialBaselineObserver observer = {
+        .context = &context,
+        .read_observation = trial_backend_observer_read,
+        .wait_milliseconds = trial_backend_observer_wait,
+        .should_stop = trial_backend_observer_stopped,
+        .record_observation = trial_backend_observer_record,
+    };
+    return trial_observe_baseline_window(&observer, FTST_BASELINE_STABLE_SECONDS);
 }
 
 TrialRunStatus trial_check_ftst(TrialBackend *backend) {
@@ -225,23 +277,54 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
     double started = backend->monotonic_seconds(backend->context);
     if (!isfinite(started) || started < 0.0) return TRIAL_RUN_BASELINE_REJECTED;
     bool write_ok = backend->write_ftst(backend->context, 1);
-    TrialObservation unlocked = {0};
-    bool observed = backend->read_observation(backend->context, true, &unlocked);
-    if (observed && backend->record_observation != NULL) {
-        backend->record_observation(backend->context, 0, &unlocked);
+    TrialObservation after_write = {0};
+    bool observed_effect = false;
+    for (unsigned half_second = 0; half_second <= FTST_EFFECT_WAIT_HALF_SECONDS;
+         ++half_second) {
+        if (!backend->read_observation(backend->context, true, &after_write)) {
+            break;
+        }
+        if (backend->record_observation != NULL) {
+            backend->record_observation(backend->context, half_second, &after_write);
+        }
+        if (!trial_observation_is_baseline(&after_write)) {
+            observed_effect = true;
+            break;
+        }
+        if (!temperatures_safe(&after_write)) break;
+        if (backend->should_stop(backend->context) ||
+            half_second == FTST_EFFECT_WAIT_HALF_SECONDS ||
+            !backend->wait_milliseconds(backend->context, 500)) break;
     }
-    bool unlock_ok = write_ok && observed && unlocked.ftst == 1 &&
-                     system_modes_and_zero_targets(&unlocked) &&
-                     temperatures_safe(&unlocked) &&
-                     backend->monotonic_seconds(backend->context) - started < 5.0 &&
-                     !backend->should_stop(backend->context);
-    if (!trial_restore_unlock(backend)) return TRIAL_RUN_RESTORE_FAILED;
-    // The SMC accepted Ftst=1 on Mac15,7 before a read showed Ftst=0. A
-    // baseline read here cannot rule out an effect after this process exits.
-    if (write_ok && (!observed || unlocked.ftst != 1)) {
-        return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
+
+    if (observed_effect) {
+        bool unlock_ok = write_ok && after_write.ftst == 1 &&
+                         system_modes_and_zero_targets(&after_write) &&
+                         temperatures_safe(&after_write) &&
+                         backend->monotonic_seconds(backend->context) - started < 5.0 &&
+                         !backend->should_stop(backend->context);
+        if (!trial_restore_unlock(backend)) return TRIAL_RUN_RESTORE_FAILED;
+        if (after_write.ftst == 0 &&
+            trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+            return TRIAL_RUN_RESTORE_FAILED;
+        }
+        return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
     }
-    return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
+
+    // A successful write may become visible only after the first read. Issue
+    // the matching release even when all ten seconds still looked unchanged.
+    if (write_ok && !backend->write_ftst(backend->context, 0)) {
+        return TRIAL_RUN_RESTORE_FAILED;
+    }
+    TrialBaselineResult later = trial_observe_after_ftst(backend);
+    if (later.status != TRIAL_BASELINE_STABLE) {
+        if (!trial_restore_unlock(backend) ||
+            trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+            return TRIAL_RUN_RESTORE_FAILED;
+        }
+    }
+    // Even a stable minute cannot exclude an effect after this process exits.
+    return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
 }
 
 static bool manual_state_matches(

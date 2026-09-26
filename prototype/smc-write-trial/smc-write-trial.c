@@ -111,15 +111,21 @@ typedef struct {
 } WriteEvent;
 
 typedef struct {
+    unsigned second;
+    double time;
+    TrialObservation observation;
+} ObservationEvent;
+
+typedef struct {
     Smc *smc;
     const LiveSnapshot *known_keys;
     const TrialPlan *allowed_plan;
     bool buffer_events;
     WriteEvent writes[64];
     size_t write_count;
-    bool has_unlock_observation;
-    double unlock_observation_time;
-    TrialObservation unlock_observation;
+    ObservationEvent observations[256];
+    size_t observation_count;
+    bool observation_overflow;
 } LiveBackend;
 
 static volatile sig_atomic_t interrupted = 0;
@@ -571,27 +577,39 @@ static void print_record(
     FILE *output, unsigned second, double time, const TrialObservation *observation) {
     fprintf(output,
             "{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
-            "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
-            "\"target\":[%.0f,%.0f],\"temperatures\":[%.2f,%.2f,%.2f]}\n",
+            "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":",
             time, second,
-            observation->mode[0], observation->mode[1], observation->ftst,
-            observation->actual_rpm[0], observation->actual_rpm[1],
-            observation->target_rpm[0], observation->target_rpm[1],
-            observation->temperatures_c[0],
-            observation->temperatures_c[1],
-            observation->temperatures_c[2]);
+            observation->mode[0], observation->mode[1], observation->ftst);
+    if (observation->metrics_available) {
+        fprintf(output, "[%.0f,%.0f],", observation->actual_rpm[0],
+                observation->actual_rpm[1]);
+    } else {
+        fputs("null,", output);
+    }
+    fprintf(output, "\"target\":[%.0f,%.0f],\"temperatures\":",
+            observation->target_rpm[0], observation->target_rpm[1]);
+    if (observation->metrics_available) {
+        fprintf(output, "[%.2f,%.2f,%.2f]}\n", observation->temperatures_c[0],
+                observation->temperatures_c[1], observation->temperatures_c[2]);
+    } else {
+        fputs("null}\n", output);
+    }
 }
 
 static void print_buffered_events(const LiveBackend *backend, FILE *output) {
-    bool observation_printed = false;
-    for (size_t index = 0; index < backend->write_count; ++index) {
-        const WriteEvent *event = &backend->writes[index];
-        if (backend->has_unlock_observation && !observation_printed &&
-            backend->unlock_observation_time < event->time) {
-            print_record(output, 0, backend->unlock_observation_time,
-                         &backend->unlock_observation);
-            observation_printed = true;
+    size_t write_index = 0;
+    size_t observation_index = 0;
+    while (write_index < backend->write_count ||
+           observation_index < backend->observation_count) {
+        if (observation_index < backend->observation_count &&
+            (write_index == backend->write_count ||
+             backend->observations[observation_index].time <
+                 backend->writes[write_index].time)) {
+            const ObservationEvent *sample = &backend->observations[observation_index++];
+            print_record(output, sample->second, sample->time, &sample->observation);
+            continue;
         }
+        const WriteEvent *event = &backend->writes[write_index++];
         fprintf(output,
                 "{\"event\":\"write\",\"time\":%.6f,\"key\":\"%.4s\","
                 "\"value\":%.0f,\"ok\":%s,\"transport_attempted\":%s",
@@ -604,10 +622,7 @@ static void print_buffered_events(const LiveBackend *backend, FILE *output) {
         }
         fputs("}\n", output);
     }
-    if (backend->has_unlock_observation && !observation_printed) {
-        print_record(output, 0, backend->unlock_observation_time,
-                     &backend->unlock_observation);
-    }
+    if (backend->observation_overflow) fputs("{\"event\":\"observation_overflow\"}\n", output);
     fflush(output);
 }
 
@@ -682,6 +697,7 @@ static bool backend_read_observation(
     if (include_temperatures) {
         memcpy(output->temperatures_c, current.temperatures_c, sizeof(output->temperatures_c));
     }
+    output->metrics_available = include_temperatures;
     return true;
 }
 
@@ -707,9 +723,15 @@ static void backend_record(
     LiveBackend *backend = context;
     double time = monotonic_seconds();
     if (backend->buffer_events) {
-        backend->has_unlock_observation = true;
-        backend->unlock_observation_time = time;
-        backend->unlock_observation = *observation;
+        if (backend->observation_count <
+            sizeof(backend->observations) / sizeof(backend->observations[0])) {
+            ObservationEvent *sample = &backend->observations[backend->observation_count++];
+            sample->second = second;
+            sample->time = time;
+            sample->observation = *observation;
+        } else {
+            backend->observation_overflow = true;
+        }
         return;
     }
     print_record(stdout, second, time, observation);
@@ -789,6 +811,7 @@ static bool baseline_observer_read(void *context, TrialObservation *observation)
     }
     memcpy(observation->temperatures_c, snapshot.temperatures_c,
            sizeof(observation->temperatures_c));
+    observation->metrics_available = true;
     return true;
 }
 
@@ -1026,7 +1049,7 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     }
     if (status == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED) {
         fflush(stdout);
-        fputs("CRITICAL: accepted Ftst write was not observed; delayed change is possible. "
+        fputs("CRITICAL: Ftst write effect was not observed; delayed change is possible. "
               "Do not treat the current baseline as restored; observe independently and "
               "use emergency recovery if it changes.\n", stderr);
         fflush(stderr);
