@@ -30,8 +30,14 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 ./integrated-probe.sh status "$APP"
 ./integrated-probe.sh register "$APP"
 ./integrated-probe.sh check "$APP"
+./integrated-probe.sh restart-check "$APP"
+./integrated-probe.sh sleep-before "$APP"
+# Sleep the Mac and wake it again before continuing.
+./integrated-probe.sh sleep-after "$APP"
 ./integrated-probe.sh unregister "$APP"
 ./integrated-probe.sh cleanup "$APP"
 ```
 
 If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
+
+The optional `restart-check` terminates **only this test daemon** with `launchctl kill SIGKILL`, then requires a new root PID and a successful signed XPC request. It never touches the ordinary Ventilator UI or fan control. Run it only while the signed read-only service is `enabled`; a failed restart still requires `unregister` before `cleanup`. The two sleep commands record the current boot and `pmset` sleep/wake count, then require a new cycle in the same boot session, `enabled` registration, a signed response, and a UID 0 daemon. Sleep and wake the Mac yourself between them. A successful post-wake response shows that this stateless status service is available again; it does not establish any SMC recovery behavior.

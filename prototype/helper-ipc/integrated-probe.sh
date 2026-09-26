@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | restart-check APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -32,6 +32,29 @@ service_absent() {
         [ "$i" -lt 30 ] || return 1
         sleep 0.1
     done
+}
+
+running_root_pid() {
+    job=$(launchctl print "system/$service") || return 1
+    pid=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1)
+    [ -n "$pid" ] || return 1
+    uid=$(ps -p "$pid" -o uid= | tr -d ' ')
+    [ "$uid" = 0 ] || return 1
+    command=$(ps -p "$pid" -o comm=)
+    [ "$(basename "$command")" = daemon-status ] || return 1
+    printf '%s\n' "$pid"
+}
+
+sleep_wakes() {
+    pmset -g log | sed -n 's/^Total Sleep\/Wakes since boot .* :\([0-9][0-9]*\)$/\1/p' | tail -n 1
+}
+
+boot_epoch() {
+    sysctl -n kern.boottime | sed -n 's/^{ sec = \([0-9][0-9]*\), usec = .*/\1/p'
+}
+
+is_uint() {
+    case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac
 }
 
 valid_identity() {
@@ -141,12 +164,62 @@ case "$action" in
         fi
         echo "ad-hoc-client=rejected"
         ventilator --helper-request
-        job=$(launchctl print "system/$service") || { echo "system service missing" >&2; exit 1; }
-        pid=$(printf '%s\n' "$job" | sed -n 's/^[[:space:]]*pid = \([0-9][0-9]*\)$/\1/p' | head -n 1)
-        [ -n "$pid" ] || { echo "system daemon has no PID" >&2; exit 1; }
-        uid=$(ps -p "$pid" -o uid= | tr -d ' ')
-        [ "$uid" = 0 ] || { echo "daemon is not running as root" >&2; exit 1; }
+        running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
+        ;;
+    restart-check)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        ventilator --helper-request >/dev/null
+        before=$(running_root_pid) || { echo "root daemon is not running" >&2; exit 1; }
+        launchctl kill SIGKILL "system/$service" || { echo "could not terminate test daemon" >&2; exit 1; }
+        attempt=0
+        while [ "$attempt" -lt 8 ]; do
+            if ventilator --helper-request >/dev/null 2>&1; then
+                after=$(running_root_pid) || { echo "request returned but root daemon is absent" >&2; exit 1; }
+                [ "$after" != "$before" ] || { echo "daemon PID did not change" >&2; exit 1; }
+                [ "$(ventilator --helper-registration-status)" = enabled ] || {
+                    echo "daemon restarted but registration is no longer enabled" >&2
+                    exit 1
+                }
+                echo "daemon-restarted=true uid=0; trusted-request=accepted"
+                exit 0
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+        echo "read-only daemon did not answer after SIGKILL; run unregister before cleanup" >&2
+        exit 1
+        ;;
+    sleep-before)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        ventilator --helper-request >/dev/null
+        running_root_pid >/dev/null || { echo "root daemon is not running" >&2; exit 1; }
+        boot=$(boot_epoch)
+        count=$(sleep_wakes)
+        is_uint "$boot" && is_uint "$count" || { echo "could not read boot time or sleep/wake count" >&2; exit 1; }
+        printf '%s %s\n' "$boot" "$count" >"$app/../.sleep-baseline"
+        echo "sleep-baseline-recorded; now sleep and wake the Mac, then run sleep-after"
+        ;;
+    sleep-after)
+        require_app "$@"
+        marker="$app/../.sleep-baseline"
+        [ -f "$marker" ] || { echo "run sleep-before first" >&2; exit 1; }
+        read -r before_boot before_count <"$marker"
+        boot=$(boot_epoch)
+        count=$(sleep_wakes)
+        is_uint "$boot" && is_uint "$count" && is_uint "$before_boot" && is_uint "$before_count" || {
+            echo "invalid boot time or sleep/wake count" >&2
+            exit 1
+        }
+        [ "$boot" = "$before_boot" ] || { echo "Mac rebooted instead of remaining in the same boot session" >&2; exit 1; }
+        [ "$count" -gt "$before_count" ] || { echo "no new sleep/wake cycle observed" >&2; exit 1; }
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is no longer enabled" >&2; exit 1; }
+        ventilator --helper-request
+        running_root_pid >/dev/null || { echo "root daemon is not running after wake" >&2; exit 1; }
+        rm "$marker"
+        echo "sleep-wake-observed=true; trusted-request=accepted; uid=0"
         ;;
     unregister)
         require_app "$@"
