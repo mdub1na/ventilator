@@ -28,8 +28,10 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 
 ```sh
 ./integrated-probe.sh status "$APP"
+./client-lifecycle-smoke.sh "$APP" # before root daemon registration
 ./integrated-probe.sh register "$APP"
 ./integrated-probe.sh check "$APP"
+./integrated-probe.sh ui-crash "$APP"
 ./integrated-probe.sh restart-before "$APP"
 # In a separate Terminal, run the sudo launchctl kill command printed above.
 ./integrated-probe.sh restart-after "$APP"
@@ -42,8 +44,14 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 
 If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
 
+Before registration, `client-lifecycle-smoke.sh` temporarily advertises the same Mach service name in the **user** bootstrap domain with the correctly signed daemon. Its signed control client must reach that service, while the main app must reject it because its `NSXPCConnection` uses `NSXPCConnectionPrivileged`. The script then suspends the user daemon during a request, kills it, requires that request to fail, explicitly restarts the daemon, and requires a fresh request to succeed. It removes the LaunchAgent even on failure; a `CRITICAL` removal error retains the plist for investigation. This tests client failure handling without root and does not prove a root in-flight interruption.
+
+After the root daemon is enabled, `ui-crash` launches only this temporary signed UI, kills its exact process, verifies its status item child exits, and requires the same root daemon PID and a new trusted XPC response. The temporary app may briefly show its window and menu-bar icon. It does not alter the ordinary installed Ventilator app.
+
 If the background switch is on but the status remains `requiresApproval`, run `unregister`, wait for that operation to settle, then run `register` again and check for `enabled`. This sequence was needed for the second local probe. Never delete the signed package while a registration is pending; `cleanup` checks that it was removed. Apple DTS also describes a delay after `SMAppService.unregister` before re-registration in [this discussion](https://developer.apple.com/forums/thread/783539).
 
 The optional `restart-before` records the running read-only daemon PID and prints the exact `sudo launchctl kill SIGKILL` command for that test service. macOS requires an administrator password in Terminal; never put it in this script or send it to another process. `restart-after` then requires a new root PID, `enabled` registration, and a successful signed XPC request. It never touches the ordinary Ventilator UI or fan control. A failed restart still requires `unregister` before `cleanup`. The two sleep commands record the current boot and `pmset` sleep/wake count, then require a new cycle in the same boot session, `enabled` registration, a signed response, and a UID 0 daemon. Sleep and wake the Mac yourself between them. A successful post-wake response shows that this stateless status service is available again; it does not establish any SMC recovery behavior.
 
 Both lifecycle checks passed on Mac15,7/macOS 27.0: a new root process answered after the administrator terminated the previous daemon, and a signed request succeeded after a recorded sleep/wake cycle in the same boot session. The temporary service and app were removed, and the background switch returned to off. These checks use fresh requests; an in-flight interruption and any fan state recovery remain untested.
+
+The domain-shadow and UI-crash probes also passed on Mac15,7/macOS 27.0. The rebuilt main app rejected a same-named signed user LaunchAgent, then accepted two fixed replies from the root daemon. After the temporary UI was killed, its status-item child exited; the root daemon kept its PID and answered a fresh request. `unregister` verified `notRegistered` and system-service absence, the package was removed, and the background switch returned to off. The simulated in-flight interruption was limited to the user LaunchAgent; an in-flight root interruption and SMC recovery remain untested.

@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -166,6 +166,55 @@ case "$action" in
         ventilator --helper-request
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
+        ;;
+    ui-crash)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        ventilator --helper-request >/dev/null
+        before=$(running_root_pid) || { echo "root daemon is not running" >&2; exit 1; }
+        scratch=$(dirname "$app")
+        ui_pid=
+        tray_pid=
+        cleanup_ui() {
+            result=$?
+            trap - EXIT HUP INT TERM
+            if [ -n "$ui_pid" ] && kill -0 "$ui_pid" 2>/dev/null; then
+                kill -KILL "$ui_pid" 2>/dev/null || true
+                wait "$ui_pid" 2>/dev/null || true
+            fi
+            if [ -n "$tray_pid" ] && kill -0 "$tray_pid" 2>/dev/null; then
+                kill "$tray_pid" 2>/dev/null || true
+            fi
+            exit "$result"
+        }
+        trap cleanup_ui EXIT HUP INT TERM
+        "$app/Contents/MacOS/Ventilator" >"$scratch/.ui-crash-output" 2>&1 &
+        ui_pid=$!
+        attempt=0
+        while [ "$attempt" -lt 100 ]; do
+            kill -0 "$ui_pid" 2>/dev/null || { echo "temporary UI exited before tray started" >&2; exit 1; }
+            tray_pid=$(pgrep -P "$ui_pid" -f 'status-item-bridge' | head -n 1 || true)
+            [ -z "$tray_pid" ] || break
+            attempt=$((attempt + 1))
+            sleep 0.1
+        done
+        [ -n "$tray_pid" ] || { echo "temporary UI did not start tray bridge" >&2; exit 1; }
+        echo "temporary-ui=$ui_pid tray=$tray_pid root-daemon=$before"
+        kill -KILL "$ui_pid"
+        wait "$ui_pid" 2>/dev/null || true
+        ui_pid=
+        attempt=0
+        while kill -0 "$tray_pid" 2>/dev/null; do
+            attempt=$((attempt + 1))
+            [ "$attempt" -lt 50 ] || { echo "tray bridge survived UI crash" >&2; exit 1; }
+            sleep 0.1
+        done
+        tray_pid=
+        after=$(running_root_pid) || { echo "root daemon disappeared after UI crash" >&2; exit 1; }
+        [ "$after" = "$before" ] || { echo "root daemon restarted after UI crash" >&2; exit 1; }
+        ventilator --helper-request
+        echo "ui-crash=isolated tray=exited root-daemon=unchanged trusted-request=accepted"
+        rm -f "$scratch/.ui-crash-output"
         ;;
     restart-before)
         require_app "$@"

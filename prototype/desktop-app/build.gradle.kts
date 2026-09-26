@@ -82,6 +82,12 @@ tasks.matching { it.name == "run" }.configureEach {
 }
 
 tasks.matching { it.name == "createDistributable" }.configureEach {
+    inputs.files(
+        file("../smc-read/smc-read"),
+        file("../menu-bar/status-item-bridge"),
+        file("../login-item/liblogin-item.dylib"),
+        file("../helper-ipc/libhelper-probe.dylib"),
+    )
     val packagedApp = layout.buildDirectory.dir("compose/binaries/main/app/Ventilator.app")
     val packagedReader = packagedApp.map { it.file("Contents/app/resources/smc-read") }
     val packagedStatusItem = packagedApp.map { it.file("Contents/app/resources/status-item-bridge") }
