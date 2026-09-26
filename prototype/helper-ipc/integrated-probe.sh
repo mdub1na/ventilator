@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | restart-check APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -167,21 +167,30 @@ case "$action" in
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
         ;;
-    restart-check)
+    restart-before)
         require_app "$@"
         [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
         ventilator --helper-request >/dev/null
         before=$(running_root_pid) || { echo "root daemon is not running" >&2; exit 1; }
-        launchctl kill SIGKILL "system/$service" || { echo "could not terminate test daemon" >&2; exit 1; }
+        printf '%s\n' "$before" >"$app/../.restart-baseline"
+        echo "restart-baseline-recorded; run: sudo launchctl kill SIGKILL system/$service"
+        ;;
+    restart-after)
+        require_app "$@"
+        marker="$app/../.restart-baseline"
+        [ -f "$marker" ] || { echo "run restart-before first" >&2; exit 1; }
+        read -r before <"$marker"
+        is_uint "$before" || { echo "invalid daemon PID baseline" >&2; exit 1; }
         attempt=0
         while [ "$attempt" -lt 8 ]; do
             if ventilator --helper-request >/dev/null 2>&1; then
                 after=$(running_root_pid) || { echo "request returned but root daemon is absent" >&2; exit 1; }
-                [ "$after" != "$before" ] || { echo "daemon PID did not change" >&2; exit 1; }
+                [ "$after" != "$before" ] || { echo "daemon PID did not change; run the sudo launchctl kill command" >&2; exit 1; }
                 [ "$(ventilator --helper-registration-status)" = enabled ] || {
                     echo "daemon restarted but registration is no longer enabled" >&2
                     exit 1
                 }
+                rm "$marker"
                 echo "daemon-restarted=true uid=0; trusted-request=accepted"
                 exit 0
             fi

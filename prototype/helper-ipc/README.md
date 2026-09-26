@@ -30,7 +30,9 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 ./integrated-probe.sh status "$APP"
 ./integrated-probe.sh register "$APP"
 ./integrated-probe.sh check "$APP"
-./integrated-probe.sh restart-check "$APP"
+./integrated-probe.sh restart-before "$APP"
+# In a separate Terminal, run the sudo launchctl kill command printed above.
+./integrated-probe.sh restart-after "$APP"
 ./integrated-probe.sh sleep-before "$APP"
 # Sleep the Mac and wake it again before continuing.
 ./integrated-probe.sh sleep-after "$APP"
@@ -40,4 +42,8 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 
 If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
 
-The optional `restart-check` terminates **only this test daemon** with `launchctl kill SIGKILL`, then requires a new root PID and a successful signed XPC request. It never touches the ordinary Ventilator UI or fan control. Run it only while the signed read-only service is `enabled`; a failed restart still requires `unregister` before `cleanup`. The two sleep commands record the current boot and `pmset` sleep/wake count, then require a new cycle in the same boot session, `enabled` registration, a signed response, and a UID 0 daemon. Sleep and wake the Mac yourself between them. A successful post-wake response shows that this stateless status service is available again; it does not establish any SMC recovery behavior.
+If the background switch is on but the status remains `requiresApproval`, run `unregister`, wait for that operation to settle, then run `register` again and check for `enabled`. This sequence was needed for the second local probe. Never delete the signed package while a registration is pending; `cleanup` checks that it was removed. Apple DTS also describes a delay after `SMAppService.unregister` before re-registration in [this discussion](https://developer.apple.com/forums/thread/783539).
+
+The optional `restart-before` records the running read-only daemon PID and prints the exact `sudo launchctl kill SIGKILL` command for that test service. macOS requires an administrator password in Terminal; never put it in this script or send it to another process. `restart-after` then requires a new root PID, `enabled` registration, and a successful signed XPC request. It never touches the ordinary Ventilator UI or fan control. A failed restart still requires `unregister` before `cleanup`. The two sleep commands record the current boot and `pmset` sleep/wake count, then require a new cycle in the same boot session, `enabled` registration, a signed response, and a UID 0 daemon. Sleep and wake the Mac yourself between them. A successful post-wake response shows that this stateless status service is available again; it does not establish any SMC recovery behavior.
+
+Both lifecycle checks passed on Mac15,7/macOS 27.0: a new root process answered after the administrator terminated the previous daemon, and a signed request succeeded after a recorded sleep/wake cycle in the same boot session. The temporary service and app were removed, and the background switch returned to off. These checks use fresh requests; an in-flight interruption and any fan state recovery remain untested.
