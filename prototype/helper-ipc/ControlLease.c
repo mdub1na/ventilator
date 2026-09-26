@@ -20,11 +20,15 @@ static void require_recovery(ControlLease *lease) {
     lease->expires_at_ns = 0;
 }
 
-void control_lease_start(ControlLease *lease, SmcBaselineResult result,
+void control_lease_start(ControlLease *lease, ControlIntentStatus intent,
+                         SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot, uint64_t now_ns) {
     if (lease == NULL) return;
     memset(lease, 0, sizeof(*lease));
-    if (now_ns == 0 || !valid_read(result, snapshot)) {
+    if (intent != CONTROL_INTENT_CLEAR) {
+        lease->write_pending = true;
+        require_recovery(lease);
+    } else if (now_ns == 0 || !valid_read(result, snapshot)) {
         lease->state = CONTROL_LEASE_READ_FAILED;
     } else if (!smc_baseline_is_system(snapshot)) {
         require_recovery(lease);
@@ -62,10 +66,15 @@ void control_lease_sample(ControlLease *lease, SmcBaselineResult result,
 }
 
 bool control_lease_claim(ControlLease *lease, uint64_t owner, uint64_t now_ns,
-                         bool restore_protocol_verified, SmcBaselineResult result,
+                         bool restore_protocol_verified, ControlIntentStatus intent,
+                         SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot) {
-    if (lease == NULL || lease->state != CONTROL_LEASE_STABLE ||
-        !restore_protocol_verified || owner == 0 || now_ns == 0 ||
+    if (lease == NULL || lease->state != CONTROL_LEASE_STABLE) return false;
+    if (intent != CONTROL_INTENT_CLEAR) {
+        require_recovery(lease);
+        return false;
+    }
+    if (!restore_protocol_verified || owner == 0 || now_ns == 0 ||
         now_ns < lease->last_sample_ns ||
         now_ns - lease->last_sample_ns > UINT64_C(2000000000) ||
         now_ns > UINT64_MAX - CONTROL_LEASE_TTL_NS) return false;
@@ -86,10 +95,11 @@ bool control_lease_claim(ControlLease *lease, uint64_t owner, uint64_t now_ns,
 }
 
 bool control_lease_mark_write_pending(ControlLease *lease, uint64_t owner,
-                                      uint64_t now_ns) {
+                                      uint64_t now_ns, ControlIntentStatus intent) {
     if (lease == NULL || lease->state != CONTROL_LEASE_HELD ||
         owner == 0 || owner != lease->owner) return false;
-    if (now_ns < lease->last_sample_ns || now_ns >= lease->expires_at_ns) {
+    if (intent != CONTROL_INTENT_PENDING ||
+        now_ns < lease->last_sample_ns || now_ns >= lease->expires_at_ns) {
         require_recovery(lease);
         return false;
     }
@@ -98,11 +108,12 @@ bool control_lease_mark_write_pending(ControlLease *lease, uint64_t owner,
 }
 
 bool control_lease_renew(ControlLease *lease, uint64_t owner, uint64_t now_ns,
-                         SmcBaselineResult result,
+                         ControlIntentStatus intent, SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot) {
     if (lease == NULL || lease->state != CONTROL_LEASE_HELD ||
         owner == 0 || owner != lease->owner) return false;
-    if (now_ns < lease->last_sample_ns || now_ns >= lease->expires_at_ns ||
+    if (intent != (lease->write_pending ? CONTROL_INTENT_PENDING : CONTROL_INTENT_CLEAR) ||
+        now_ns < lease->last_sample_ns || now_ns >= lease->expires_at_ns ||
         now_ns > UINT64_MAX - CONTROL_LEASE_TTL_NS ||
         !valid_read(result, snapshot) || !cool_enough(snapshot) ||
         (lease->write_pending && smc_baseline_is_system(snapshot)) ||

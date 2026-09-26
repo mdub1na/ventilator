@@ -2,7 +2,7 @@ CC ?= clang
 CFLAGS = -fobjc-arc -Wall -Wextra -Werror -O2
 JDK_HOME = $(shell /usr/libexec/java_home -v 25)
 
-.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test
+.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test
 
 build: helper-status
 
@@ -41,9 +41,16 @@ startup-audit-test: StartupAuditControllerTest
 control-lease-test: ControlLeaseTest
 	./ControlLeaseTest
 
-ControlLeaseTest: ControlLeaseTest.c ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
+ControlLeaseTest: ControlLeaseTest.c ControlLease.c ControlLease.h ControlIntentJournal.h SmcBaselineRead.c SmcBaselineRead.h
 	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \
 		ControlLeaseTest.c ControlLease.c SmcBaselineRead.c -o $@
+
+control-intent-test: ControlIntentJournalTest
+	./ControlIntentJournalTest
+
+ControlIntentJournalTest: ControlIntentJournalTest.c ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
+	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \
+		ControlIntentJournalTest.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
 
 StartupAuditControllerTest: StartupAuditControllerTest.m StartupAuditController.m StartupAuditController.h HelperStartupAuditValidation.h HelperBaselineValidation.h HelperTemperatureValue.h HelperStatus.h SmcBaselineRead.c SmcBaselineRead.h
 	$(CC) $(CFLAGS) -framework Foundation -framework IOKit \
@@ -75,4 +82,4 @@ package-smoke: build agent-registration
 	./package-smoke.sh
 
 clean:
-	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest
+	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest ControlIntentJournalTest
