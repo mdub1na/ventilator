@@ -42,6 +42,7 @@ cat >"$plist" <<EOF
   <key>ProgramArguments</key><array>
     <string>$app/Contents/Resources/daemon-status</string>
     <string>$service</string><string>$team</string>
+    <string>com.ventilator.helper-ipc.signed-client</string>
   </array>
   <key>MachServices</key><dict><key>$service</key><true/></dict>
 </dict></plist>

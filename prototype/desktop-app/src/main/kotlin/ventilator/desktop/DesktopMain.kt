@@ -19,8 +19,10 @@ import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
 import androidx.compose.ui.window.rememberWindowState
 import java.nio.file.Path
+import kotlin.system.exitProcess
 import kotlinx.coroutines.delay
 import ventilator.desktop.login.data.NativeLoginItemRepository
+import ventilator.desktop.helper.HelperProbeCommand
 import ventilator.desktop.login.domain.LaunchMode
 import ventilator.desktop.login.ui.LoginItemViewModel
 import ventilator.desktop.monitoring.data.SmcMonitorRepository
@@ -49,6 +51,13 @@ private val colors = darkColorScheme(
 @OptIn(ExperimentalMaterial3ExpressiveApi::class)
 fun main(args: Array<String>) {
     val packagedResources = System.getProperty("compose.application.resources.dir")?.let(Path::of)
+    if (args.firstOrNull()?.startsWith("--helper-") == true) {
+        if (args.size != 1) {
+            System.err.println("Helper probe command does not accept arguments")
+            exitProcess(2)
+        }
+        exitProcess(HelperProbeCommand.run(args[0], packagedResources))
+    }
     // Install the Apple Event observer before Compose initializes AppKit.
     val loginItemRepository = NativeLoginItemRepository.fromPackagedResources(packagedResources)
     val probe = (args.firstOrNull()?.let(Path::of) ?: packagedResources?.resolve("smc-read") ?: Path.of("../smc-read/smc-read"))

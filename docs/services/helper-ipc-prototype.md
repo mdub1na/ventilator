@@ -4,7 +4,7 @@ title: Прототип XPC статуса helper
 type: service
 repo_url: https://github.com/mdub1na/ventilator
 module: prototype/helper-ipc
-tech_stack: [Objective-C, Foundation, ServiceManagement, NSXPCConnection, launchd, macOS]
+tech_stack: [Kotlin/JVM, Objective-C, JNI, Foundation, Security, ServiceManagement, NSXPCConnection, launchd, macOS]
 owner: unassigned
 depends_on: [Foundation, launchd]
 publishes: [fixed local XPC status]
@@ -17,6 +17,8 @@ publishes: [fixed local XPC status]
 `helper-status` в режиме `serve` создаёт именованный `NSXPCListener` с одним методом без входных аргументов. Режим `request` подключается через `NSXPCConnection`, проверяет точный ответ и выводит JSON. Smoke-проба передаёт `cdhash` временных ad hoc копий. `serve` отказывает в работе от root.
 
 Отдельный `daemon-status` предоставляет тот же фиксированный статус и принимает только клиента с Apple anchor, точным code identifier и Team ID. Подписанный `helper-status request-signed` требует такую же идентичность daemon. Этот процесс проверен в системном домене с UID 0, но не линкует IOKit или writer и не обращается к AppleSMC. Он не входит в основной `Ventilator.app`.
+
+Для проверки интеграции `HelperProbeBridge.m` загружается из основного JVM-процесса упакованного `Ventilator.app`. Мост читает Team ID собственной подписи через Security framework, требует точный identifier daemon и предоставляет только статус регистрации, явную регистрацию/отмену и `fetchStatusWithReply`. Команды доступны диагностическому CLI; обычный запуск окна не обращается к daemon. `integrated-probe.sh` добавляет daemon в отдельную подписанную копию приложения, не в установленный пользовательский пакет.
 
 ## 2. Contract
 
@@ -36,6 +38,10 @@ publishes: [fixed local XPC status]
 | `prototype/helper-ipc/daemon-registration.m` | вызовы `SMAppService.daemon` из тестового `.app` |
 | `prototype/helper-ipc/daemon-probe.sh` | подписанный пакет, регистрация, проверка и удаление |
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |
+| `prototype/helper-ipc/HelperProbeBridge.m` | JNI-мост основного процесса к ServiceManagement и XPC |
+| `prototype/helper-ipc/integrated-probe.sh` | подписанная копия Compose app и проверка её daemon |
+| `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` | диагностические команды основного JVM-процесса |
+| `prototype/desktop-app/build.gradle.kts` | упаковка JNI-библиотеки |
 
 ## 4. Local setup
 
@@ -47,6 +53,8 @@ publishes: [fixed local XPC status]
 
 На `Mac15,7`/macOS 27.0 первый `register` вернул `Operation not permitted` и `requiresApproval`. После разрешения macOS статус стал `enabled`, системный daemon работал с UID 0, оба доверенных запроса прошли, ad hoc клиент был отклонён. Повторный запуск пробы также отклонил другого подписанного клиента. `unregister` оба раза вернул `notRegistered`; служба отсутствовала в `launchctl`, оба пакета удалены. Это не проверка обновления, распространения или основного приложения.
 
+Интеграционный скрипт собирает Compose app через `createDistributable`, копирует пакет во временный каталог, добавляет read-only daemon с требованием к `ventilator.desktop` и подписывает всю копию Apple Development сертификатом. `codesign --verify --strict --deep` прошёл на `Mac15,7`/macOS 27.0. Команда `--helper-registration-status` из главного JVM-процесса загрузила JNI-мост и сначала показала `notFound`; после `--helper-register` macOS вернула `requiresApproval`. Запрос `--helper-request` до разрешения завершился ошибкой, а не ложным статусом. Дальнейший результат будет записан после одобрения macOS и проверки удаления.
+
 ## 5. Limits
 
-Имена служб служат только для проб. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора. Действующий Apple Development сертификат найден вне песочницы; он подходит для локальной пробы, а Developer ID и нотарификация не проверены. Оба тестовых пакета создаются во временном каталоге и удаляются после подтверждённого `unregister`; интеграции с UI и доступа к SMC нет. `helper-status serve` по-прежнему отказывает при root. Отдельный `daemon-status` нельзя расширять командой записи до проверки [границы helper](../research/research-helper-boundary.md).
+Имена служб служат только для проб. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора. Действующий Apple Development сертификат найден вне песочницы; он подходит для локальной пробы, а Developer ID и нотарификация не проверены. Тестовые пакеты создаются во временном каталоге и удаляются после подтверждённого `unregister`; доступа к SMC в daemon нет. `helper-status serve` по-прежнему отказывает при root. Отдельный `daemon-status` нельзя расширять командой записи до проверки [границы helper](../research/research-helper-boundary.md).
