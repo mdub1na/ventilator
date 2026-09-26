@@ -1,5 +1,6 @@
 #import "HelperStatus.h"
 #import "BaselineWatchController.h"
+#import "StartupAuditController.h"
 #include "SmcBaselineRead.h"
 #include <ctype.h>
 #include <time.h>
@@ -46,6 +47,10 @@
             @"temperatures_c": @[@(snapshot.temperatures_c[0]),
                                   @(snapshot.temperatures_c[1]),
                                   @(snapshot.temperatures_c[2])]});
+}
+
+- (void)fetchStartupAuditWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[StartupAuditController shared] status]);
 }
 
 - (void)startBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
@@ -114,6 +119,8 @@ int main(int argc, const char *argv[]) {
         NSString *requirement = [NSString stringWithFormat:
             @"anchor apple generic and identifier \"%s\" and certificate leaf[subject.OU] = \"%s\"",
             argv[3], argv[2]];
+        // Capture before the listener accepts the first XPC request.
+        [StartupAuditController shared];
         NSXPCListener *listener = [[NSXPCListener alloc] initWithMachServiceName:serviceName];
         DaemonListener *delegate = [DaemonListener new];
         listener.delegate = delegate;

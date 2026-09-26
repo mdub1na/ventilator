@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | startup-audit-crash-run APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -150,6 +150,10 @@ case "$action" in
             *) echo "root daemon did not confirm read-only system baseline: $baseline" >&2; exit 1 ;;
         esac
         echo "root-baseline=$baseline"
+        audit=$(ventilator --helper-startup-audit)
+        case "$audit" in *'"state":"system_at_start"'* ) ;; *) echo "root startup audit is not system: $audit" >&2; exit 1 ;; esac
+        case "$audit" in *'"control_allowed":false'* ) ;; *) echo "startup audit authorizes control: $audit" >&2; exit 1 ;; esac
+        echo "root-startup-audit=$audit"
         scratch=$(dirname "$app")
         make helper-status
         valid_identity
@@ -172,6 +176,39 @@ case "$action" in
         ventilator --helper-request
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
+        ;;
+    startup-audit-crash-run)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        sudo -v
+        before_audit=$(ventilator --helper-startup-audit)
+        before=$(running_root_pid) || { echo "root daemon did not start" >&2; exit 1; }
+        case "$before_audit" in *"\"daemon_pid\":$before"* ) ;; *) echo "startup audit PID mismatch: $before_audit" >&2; exit 1 ;; esac
+        case "$before_audit" in *'"state":"system_at_start"'* ) ;; *) echo "startup state is not system: $before_audit" >&2; exit 1 ;; esac
+        before_time=$(printf '%s\n' "$before_audit" | sed -n 's/.*"sample_monotonic_ns":\([0-9][0-9]*\).*/\1/p')
+        is_uint "$before_time" || { echo "startup sample time missing" >&2; exit 1; }
+        echo "startup-audit-before=$before_audit"
+        sudo -n launchctl kill SIGKILL "system/$service"
+        attempt=0
+        while [ "$attempt" -lt 8 ]; do
+            if after_audit=$(ventilator --helper-startup-audit 2>/dev/null); then
+                after=$(running_root_pid) || { echo "audit answered without root daemon" >&2; exit 1; }
+                if [ "$after" != "$before" ]; then
+                    case "$after_audit" in *"\"daemon_pid\":$after"* ) ;; *) echo "new startup audit PID mismatch: $after_audit" >&2; exit 1 ;; esac
+                    case "$after_audit" in *'"state":"system_at_start"'* ) ;; *) echo "new startup state is not system: $after_audit" >&2; exit 1 ;; esac
+                    case "$after_audit" in *'"control_allowed":false'* ) ;; *) echo "new startup audit authorizes control: $after_audit" >&2; exit 1 ;; esac
+                    after_time=$(printf '%s\n' "$after_audit" | sed -n 's/.*"sample_monotonic_ns":\([0-9][0-9]*\).*/\1/p')
+                    is_uint "$after_time" && [ "$after_time" -gt "$before_time" ] || { echo "new daemon did not take a later startup sample" >&2; exit 1; }
+                    echo "startup-audit-after=$after_audit"
+                    echo "startup-audit-crash=recovered old-pid=$before new-pid=$after"
+                    exit 0
+                fi
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+        echo "new daemon did not answer with a later startup audit" >&2
+        exit 1
         ;;
     watch)
         require_app "$@"

@@ -26,6 +26,10 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 
 Дополнительные методы `startBaselineWatchWithReply` и `fetchBaselineWatchWithReply` также не принимают параметров. UID 0 daemon хранит состояние 61 последовательного read-only снимка после выхода клиента и отдаёт `idle`, `running`, `stable`, `changed` или `read_failed`. Подписанный клиент проверяет число снимков, последнюю отметку и пересчитывает `baseline`. На `Mac15,7`/macOS 27.0 наблюдение дошло до `stable` за 66,09 секунды от одного PID daemon, когда первый JVM-процесс уже завершился. Подробности и ограничения — в [сценариях watcher](../features/helper-baseline-watch.md).
 
+Новый `fetchStartupAuditWithReply` возвращает неизменяемое read-only чтение, захваченное до запуска listener в текущем процессе daemon. Состояния: `system_at_start`, `changed_at_start`, `read_failed`; во всех случаях `control_allowed=false`. Подписанный клиент повторно проверяет снимок и состояние. Этот audit отделён от минутного watcher и от свежего `fetchBaselineWithReply`; [сценарии](../features/helper-startup-audit.md) фиксируют его ограничения.
+
+Подписанная root проба на `Mac15,7`/macOS 27.0 вернула `system_at_start` от PID `49002` с исходными `Ftst=0`, режимами `[3,3]` и целями `[0,0]`; отметка audit предшествовала отдельному свежему чтению. После `SIGKILL` новый PID `49648` вернул собственный, более поздний audit с теми же исходными показаниями и `control_allowed=false`. Временная служба и пакет удалены, фоновая активность возвращена в «выкл.».
+
 ## 3. Code anchors
 
 | Файл | Назначение |
@@ -41,6 +45,7 @@ publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 | `prototype/helper-ipc/HelperBaselineValidation.h` | проверка формы XPC снимка и независимый пересчёт `baseline` на стороне клиентов |
 | `prototype/helper-ipc/BaselineWatch.c`, `prototype/helper-ipc/BaselineWatchController.m` | sticky state machine и таймер внутри daemon |
 | `prototype/helper-ipc/HelperWatchValidation.h` | проверка XPC статуса watcher на стороне клиента |
+| `prototype/helper-ipc/StartupAuditController.m`, `prototype/helper-ipc/HelperStartupAuditValidation.h` | одно чтение перед listener и проверка ответа у клиента |
 | `prototype/helper-ipc/daemon-registration.m` | вызовы `SMAppService.daemon` из тестового `.app` |
 | `prototype/helper-ipc/daemon-probe.sh` | подписанный пакет, регистрация, проверка и удаление |
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |

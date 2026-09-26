@@ -1,6 +1,7 @@
 #import "HelperStatus.h"
 #import "HelperBaselineValidation.h"
 #import "HelperWatchValidation.h"
+#import "HelperStartupAuditValidation.h"
 #import <Security/Security.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <jni.h>
@@ -91,6 +92,7 @@ typedef enum {
     DaemonRequestBaseline,
     DaemonRequestWatchStart,
     DaemonRequestWatchStatus,
+    DaemonRequestStartupAudit,
 } DaemonRequest;
 
 static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequest request) {
@@ -124,6 +126,7 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
         case DaemonRequestBaseline: [remote fetchBaselineWithReply:complete]; break;
         case DaemonRequestWatchStart: [remote startBaselineWatchWithReply:complete]; break;
         case DaemonRequestWatchStatus: [remote fetchBaselineWatchWithReply:complete]; break;
+        case DaemonRequestStartupAudit: [remote fetchStartupAuditWithReply:complete]; break;
     }
     long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     [connection invalidate];
@@ -210,4 +213,19 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_watch
 ) {
     (void)self;
     @autoreleasepool { return requestWatch(environment, DaemonRequestWatchStatus); }
+}
+
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_startupAuditNative(
+    JNIEnv *environment, jobject self
+) {
+    (void)self;
+    @autoreleasepool {
+        NSDictionary<NSString *, id> *result = fetchDaemon(environment, DaemonRequestStartupAudit);
+        if (!result) return NULL;
+        if (!HelperStartupAuditResponseValid(result)) {
+            throwFailure(environment, @"XPC startup audit contract mismatch");
+            return NULL;
+        }
+        return encodeResult(environment, result);
+    }
 }
