@@ -358,6 +358,7 @@ TrialRunStatus trial_execute_direct(
     }
 
     bool control_ok = true;
+    bool manual_state_observed = false;
     double manual_started = backend->monotonic_seconds(backend->context);
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if (backend->should_stop(backend->context) ||
@@ -374,11 +375,14 @@ TrialRunStatus trial_execute_direct(
     }
 
     TrialObservation observation = {0};
-    if (control_ok &&
-        (!backend->read_observation(backend->context, true, &observation) ||
-         !manual_state_matches(&observation, plan, true) ||
-         backend->monotonic_seconds(backend->context) - manual_started >= 15.0)) {
-        control_ok = false;
+    if (control_ok) {
+        manual_state_observed =
+            backend->read_observation(backend->context, true, &observation) &&
+            manual_state_matches(&observation, plan, true);
+        if (!manual_state_observed ||
+            backend->monotonic_seconds(backend->context) - manual_started >= 15.0) {
+            control_ok = false;
+        }
     }
 
     for (unsigned second = 1; control_ok && second <= OBSERVE_SECONDS; ++second) {
@@ -406,5 +410,15 @@ TrialRunStatus trial_execute_direct(
     }
 
     if (!trial_restore_system(backend)) return TRIAL_RUN_RESTORE_FAILED;
+    if (trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+        if (!trial_restore_system(backend) ||
+            trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+            return TRIAL_RUN_RESTORE_FAILED;
+        }
+    }
+    // A rejected write can take effect after an immediate baseline read. When
+    // manual control was never seen, the write effect remains unverified even
+    // after a bounded observation window.
+    if (!manual_state_observed) return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
     return control_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
 }
