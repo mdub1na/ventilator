@@ -927,12 +927,17 @@ static int run_trial(Smc *smc, const char *program, bool apply) {
               stderr);
         return EXIT_FAILURE;
     }
-    if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
-        fputs("direct trial failed or was interrupted; system mode and zero targets verified\n",
+    if (status == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED) {
+        fputs("CRITICAL: direct write effect was not verified; continue independent baseline observation after this process exits\n",
               stderr);
         return EXIT_FAILURE;
     }
-    puts("direct trial succeeded and system mode was restored");
+    if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
+        fputs("direct trial failed or was interrupted; system mode observed for 60 seconds\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    puts("direct trial succeeded; system mode observed for 60 seconds");
     return EXIT_SUCCESS;
 }
 

@@ -9,6 +9,9 @@
 typedef struct {
     double now;
     bool fail_first_manual;
+    bool apply_manual_after_error;
+    bool pending_manual_effect;
+    double manual_effect_delay_seconds;
     bool fail_second_manual;
     bool fail_first_target;
     bool reject_zero_targets;
@@ -51,7 +54,10 @@ static bool mock_write_mode(void *context, unsigned fan, uint8_t mode) {
     snprintf(event, sizeof(event), "M%u=%u;", fan, mode);
     append_write(mock, event);
     ++mock->write_count;
-    if (mode == 1 && fan == 0 && mock->fail_first_manual) return false;
+    if (mode == 1 && fan == 0 && mock->fail_first_manual) {
+        if (mock->apply_manual_after_error) mock->pending_manual_effect = true;
+        return false;
+    }
     if (mode == 1 && fan == 1 && mock->fail_second_manual) return false;
     if (mode == 0 && mock->fail_auto) return false;
     mock->modes[fan] = mode;
@@ -130,6 +136,12 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
 static bool mock_wait(void *context, unsigned milliseconds) {
     MockBackend *mock = context;
     mock->now += milliseconds / 1000.0;
+    if (mock->pending_manual_effect &&
+        mock->now >= mock->manual_effect_delay_seconds) {
+        mock->pending_manual_effect = false;
+        mock->modes[0] = 1;
+        mock->targets[0] = 1650;
+    }
     if (mock->pending_ftst_release && mock->now >= 3.0) {
         mock->pending_ftst_release = false;
         mock->released_ftst = true;
@@ -187,6 +199,7 @@ static void direct_trial_success_requires_rpm_and_system_restore(void) {
         mock.writes,
         "M0=1;T0=1650;M1=1;T1=1758;M0=0;T0=0;M1=0;T1=0;") == 0);
     assert(mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now >= 65.0);
 }
 
 static void direct_trial_restores_both_fans_after_partial_failure(void) {
@@ -195,7 +208,7 @@ static void direct_trial_restores_both_fans_after_partial_failure(void) {
     TrialPlan plan = {.target_rpm = {1650, 1758}};
     const double baseline[TRIAL_FAN_COUNT] = {0, 0};
     assert(trial_execute_direct(&backend, &plan, baseline) ==
-           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
     assert(strstr(mock.writes, "M0=1;T0=1650;M1=1;M0=0;T0=0;M1=0;T1=0;") != NULL);
     assert(mock.modes[0] == 3 && mock.modes[1] == 3);
 }
@@ -206,7 +219,7 @@ static void unsafe_temperature_enters_restore_without_waiting(void) {
     TrialPlan plan = {.target_rpm = {1650, 1758}};
     const double baseline[TRIAL_FAN_COUNT] = {0, 0};
     assert(trial_execute_direct(&backend, &plan, baseline) ==
-           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
     assert(strstr(mock.writes, "M0=0;T0=0;M1=0;T1=0;") != NULL);
 }
 
@@ -216,19 +229,51 @@ static void direct_trial_restores_after_target_write_failure(void) {
     TrialPlan plan = {.target_rpm = {1650, 1758}};
     const double baseline[TRIAL_FAN_COUNT] = {0, 0};
     assert(trial_execute_direct(&backend, &plan, baseline) ==
-           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
     assert(strstr(mock.writes, "M0=1;T0=1650;M0=0;T0=0;M1=0;T1=0;") != NULL);
 }
 
-static void rejected_first_mode_write_leaves_baseline_without_restore_writes(void) {
+static void rejected_first_mode_write_stays_unverified(void) {
     MockBackend mock = {.fail_first_manual = true, .modes = {3, 3}};
     TrialBackend backend = backend_for(&mock);
     TrialPlan plan = {.target_rpm = {1650, 1758}};
     const double baseline[TRIAL_FAN_COUNT] = {0, 0};
     assert(trial_execute_direct(&backend, &plan, baseline) ==
-           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
     assert(strcmp(mock.writes, "M0=1;") == 0);
     assert(mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now >= 60.0);
+}
+
+static void rejected_mode_with_delayed_effect_is_restored(void) {
+    MockBackend mock = {.modes = {3, 3}, .fail_first_manual = true,
+                        .apply_manual_after_error = true,
+                        .manual_effect_delay_seconds = 10.0};
+    TrialBackend backend = backend_for(&mock);
+    TrialPlan plan = {.target_rpm = {1650, 1758}};
+    const double baseline[TRIAL_FAN_COUNT] = {0, 0};
+    assert(trial_execute_direct(&backend, &plan, baseline) ==
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "M0=1;M0=0;T0=0;M1=0;T1=0;") == 0);
+    assert(mock.modes[0] == 3 && mock.targets[0] == 0);
+    assert(mock.now >= 70.0);
+}
+
+static void rejected_mode_with_very_late_effect_stays_unverified(void) {
+    MockBackend mock = {.modes = {3, 3}, .fail_first_manual = true,
+                        .apply_manual_after_error = true,
+                        .manual_effect_delay_seconds = 75.0};
+    TrialBackend backend = backend_for(&mock);
+    TrialPlan plan = {.target_rpm = {1650, 1758}};
+    const double baseline[TRIAL_FAN_COUNT] = {0, 0};
+    assert(trial_execute_direct(&backend, &plan, baseline) ==
+           TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "M0=1;") == 0);
+    assert(mock.pending_manual_effect);
+    assert(mock_wait(&mock, 15000));
+    TrialObservation delayed = {0};
+    assert(mock_read(&mock, false, &delayed));
+    assert(delayed.mode[0] == 1 && delayed.target_rpm[0] == 1650);
 }
 
 static void system_modes_with_nonzero_target_still_require_cleanup(void) {
@@ -572,7 +617,9 @@ int main(void) {
     direct_trial_restores_both_fans_after_partial_failure();
     unsafe_temperature_enters_restore_without_waiting();
     direct_trial_restores_after_target_write_failure();
-    rejected_first_mode_write_leaves_baseline_without_restore_writes();
+    rejected_first_mode_write_stays_unverified();
+    rejected_mode_with_delayed_effect_is_restored();
+    rejected_mode_with_very_late_effect_stays_unverified();
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
     ftst_rejection_sends_release_and_observes();
