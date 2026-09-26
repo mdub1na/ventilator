@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | status APP | register APP | check APP | watch APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | status APP | register APP | check APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -203,6 +203,63 @@ case "$action" in
         [ "$after" = "$before" ] || { echo "root daemon PID changed during watch" >&2; exit 1; }
         echo "watch-final=$final"
         echo "watch=stable samples=61 daemon-persisted=true"
+        ;;
+    watch-crash-before)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        marker="$app/../.watch-crash-baseline"
+        [ ! -e "$marker" ] || { echo "watch crash marker already exists" >&2; exit 1; }
+        started=$(ventilator --helper-watch-start)
+        before=$(running_root_pid) || { echo "root daemon did not start" >&2; exit 1; }
+        case "$started" in *'"state":"running"'* ) ;; *) echo "watch did not start: $started" >&2; exit 1 ;; esac
+        case "$started" in *'"samples":1'* ) ;; *) echo "watch missed first sample: $started" >&2; exit 1 ;; esac
+        case "$started" in *"\"daemon_pid\":$before"* ) ;; *) echo "watch started in another daemon: $started" >&2; exit 1 ;; esac
+        start_time=$(printf '%s\n' "$started" | sed -n 's/.*"started_monotonic_ns":\([0-9][0-9]*\).*/\1/p')
+        is_uint "$start_time" || { echo "watch start time missing" >&2; exit 1; }
+        printf '%s %s\n' "$before" "$start_time" >"$marker"
+        echo "watch-crash-baseline=$started"
+        echo "run: sudo launchctl kill SIGKILL system/$service"
+        ;;
+    watch-crash-run)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        sudo -v
+        "$0" watch-crash-before "$app"
+        pre_kill=$(ventilator --helper-watch-status)
+        case "$pre_kill" in *'"state":"running"'* ) ;; *) echo "watch finished before crash: $pre_kill" >&2; exit 1 ;; esac
+        read -r before start_time <"$app/../.watch-crash-baseline"
+        case "$pre_kill" in *"\"daemon_pid\":$before"* ) ;; *) echo "watch moved to another daemon: $pre_kill" >&2; exit 1 ;; esac
+        echo "watch-pre-kill=$pre_kill"
+        sudo -n launchctl kill SIGKILL "system/$service"
+        "$0" watch-crash-after "$app"
+        ;;
+    watch-crash-after)
+        require_app "$@"
+        marker="$app/../.watch-crash-baseline"
+        [ -f "$marker" ] || { echo "run watch-crash-before first" >&2; exit 1; }
+        read -r before start_time <"$marker"
+        is_uint "$before" && is_uint "$start_time" || { echo "invalid watch crash marker" >&2; exit 1; }
+        attempt=0
+        while [ "$attempt" -lt 8 ]; do
+            if status=$(ventilator --helper-watch-status 2>/dev/null); then
+                after=$(running_root_pid) || { echo "watch status answered without root daemon" >&2; exit 1; }
+                if [ "$after" != "$before" ]; then
+                    case "$status" in *'"state":"idle"'* ) ;; *) echo "restarted daemon retained or misreported watch: $status" >&2; exit 1 ;; esac
+                    case "$status" in *'"samples":0'* ) ;; *) echo "restarted daemon retained samples: $status" >&2; exit 1 ;; esac
+                    case "$status" in *"\"daemon_pid\":$after"* ) ;; *) echo "watch status PID mismatch: $status" >&2; exit 1 ;; esac
+                    [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "registration lost after daemon restart" >&2; exit 1; }
+                    echo "old-watch-lost=$status"
+                    "$0" watch "$app"
+                    rm "$marker"
+                    echo "watch-crash=recovered old-pid=$before new-pid=$after old-start=$start_time"
+                    exit 0
+                fi
+            fi
+            attempt=$((attempt + 1))
+            sleep 1
+        done
+        echo "new daemon did not answer with a different PID; run the sudo command or keep package for unregister" >&2
+        exit 1
         ;;
     ui-crash)
         require_app "$@"
