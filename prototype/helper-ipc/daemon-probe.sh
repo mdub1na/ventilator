@@ -153,6 +153,12 @@ case "$action" in
         [ "$(registration status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
         team=$(cat "$app/../.team")
         "$app/../signed-client" request-signed "$service" "$team"
+        baseline=$("$app/../signed-client" request-baseline-signed "$service" "$team")
+        case "$baseline" in
+            *'"available":true'*'"baseline":true'* ) ;;
+            *) echo "root daemon did not confirm read-only system baseline: $baseline" >&2; exit 1 ;;
+        esac
+        echo "root-baseline=$baseline"
         if "$app/../other-client" request-signed "$service" "$team" >/dev/null 2>&1; then
             echo "CRITICAL: ad hoc client reached signed daemon" >&2
             exit 1

@@ -2,7 +2,9 @@
 
 Run `make smoke` on macOS to start temporary **user** launchd services, request a fixed status from a separate process, and remove the services. No `sudo` or SMC access is used. The ad hoc `helper-status serve` command refuses to start as root.
 
-The only method is `fetchStatusWithReply` in `HelperStatus.h`. It takes no arguments and reports protocol version `1`, `read_only_prototype`, and false values for SMC access and write availability. The client rejects a different response or a five-second timeout.
+The ad hoc status server returns protocol version `1`, `read_only_prototype`, and false values for SMC access and write availability. It answers the no-argument `fetchBaselineWithReply` method with `unsupported_provider`; only the signed daemon implements the fixed-key SMC read. The client rejects a different response or a five-second timeout.
+
+`make baseline-read-test baseline-contract-test` checks the system-state classifier and rejects a forged `baseline=true` response with nonzero targets. `SmcBaselineReadTest --live` makes one direct read-only snapshot on the supported Mac without `sudo`; this is a separate manual hardware check.
 
 The smoke script signs two copies ad hoc with different code identifiers. Each XPC peer requires the expected `cdhash`: the trusted copy connects, a different client binary cannot reach the listener, and the trusted client rejects a different server binary with XPC error `4102`. The script checks `launchctl bootout` and that each service is absent afterwards. If cleanup fails, it prints the service name and retains the temporary plist for inspection.
 
@@ -10,7 +12,7 @@ This is an IPC experiment, not a packaged root helper or a fan-control feature. 
 
 Run `make package-smoke` to build a separate temporary `HelperProbe.app` containing the same read-only executable under `Contents/Resources` and a LaunchAgent plist under `Contents/Library/LaunchAgents`. The test app uses `SMAppService.agent` to register, query and unregister that user service; a separately signed client checks XPC. The script checks both signatures, the final `notRegistered` status and absence from `launchctl` before deleting the fixture. It never modifies `Ventilator.app` or registers a root LaunchDaemon. Its ad hoc signature is suitable only for this local probe.
 
-Run `make daemon-prepare` outside the Codex sandbox to create a separate Apple Development signed `HelperDaemonProbe.app`. The command prints its absolute path as `prepared=...`. It selects a locally verifiable development identity, seals the read-only daemon and LaunchDaemon plist in the app, and checks both signing requirements. It never changes `Ventilator.app` or touches SMC. Keep the printed app path for the commands below:
+Run `make daemon-prepare` outside the Codex sandbox to create a separate Apple Development signed `HelperDaemonProbe.app`. The command prints its absolute path as `prepared=...`. It selects a locally verifiable development identity, seals the read-only daemon and LaunchDaemon plist in the app, and checks both signing requirements. It never changes the installed `Ventilator.app`. Keep the printed app path for the commands below:
 
 ```sh
 cd prototype/helper-ipc
@@ -22,9 +24,9 @@ cd prototype/helper-ipc
 ./daemon-probe.sh cleanup "$APP"
 ```
 
-If `register` reports `Operation not permitted` and `status` says `requiresApproval`, approve the test background item in macOS System Settings, then run `status` and `check`. The app must stay in place until `unregister` verifies `notRegistered` and absence from `launchctl print system/com.ventilator.helper-ipc.signed-daemon-test`; `cleanup` enforces this. `check` accepts the expected signed client, rejects both an ad hoc client and a client with the same Team ID but another identifier, and confirms the system service. The daemon provides only the fixed status method, despite running as root. Its successful local probe does not establish a safe SMC control path.
+If `register` reports `Operation not permitted` and `status` says `requiresApproval`, approve the test background item in macOS System Settings, then run `status` and `check`. The app must stay in place until `unregister` verifies `notRegistered` and absence from `launchctl print system/com.ventilator.helper-ipc.signed-daemon-test`; `cleanup` enforces this. `check` accepts the expected signed client, rejects both an ad hoc client and a client with the same Team ID but another identifier, requests a fixed-key SMC snapshot, and confirms the system service. The daemon has no SMC write selector or write method. Its successful local probe does not establish a safe SMC control path.
 
-For the main-app integration probe, run `./integrated-probe.sh prepare` from this directory. It builds a separate Apple Development signed copy of the real Compose `Ventilator.app`, embeds the same read-only daemon and a LaunchDaemon plist, then prints `prepared=...`. The app's own JVM process loads `libhelper-probe.dylib` and provides these manual commands:
+For the main-app integration probe, run `./integrated-probe.sh prepare` from this directory. It builds a separate Apple Development signed copy of the real Compose `Ventilator.app`, embeds the same read-only daemon and a LaunchDaemon plist, then prints `prepared=...`. The app's own JVM process loads `libhelper-probe.dylib` and provides manual `--helper-request` and `--helper-baseline` commands. The latter reads only fixed fan and temperature keys; callers cannot choose keys. Use the probe commands below:
 
 ```sh
 ./integrated-probe.sh status "$APP"
@@ -44,7 +46,7 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 
 For a **separate** in-flight root request probe, first reach `enabled` and pass `check`, then run `./root-inflight-smoke.sh "$APP"` from a Terminal as the logged-in user. It asks for `sudo` in that Terminal, sends `SIGSTOP` and `SIGKILL` only to `system/com.ventilator.helper-ipc.read-only`, requires the pending client request to fail without a status, then requires a new signed request from a new UID 0 daemon PID. The script resumes a stopped test daemon on ordinary errors. Keep a second Terminal ready with `sudo launchctl kill SIGCONT system/com.ventilator.helper-ipc.read-only` if the script is forcibly terminated. Always run `integrated-probe.sh unregister "$APP"` and `cleanup "$APP"` afterward and restore the background switch. Neither process has an SMC writer.
 
-If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
+If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status and a fixed-key SMC snapshot from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
 
 Before registration, `client-lifecycle-smoke.sh` temporarily advertises the same Mach service name in the **user** bootstrap domain with the correctly signed daemon. Its signed control client must reach that service, while the main app must reject it because its `NSXPCConnection` uses `NSXPCConnectionPrivileged`. The script then suspends the user daemon during a request, kills it, requires that request to fail, explicitly restarts the daemon, and requires a fresh request to succeed. It removes the LaunchAgent even on failure; a `CRITICAL` removal error retains the plist for investigation. This tests client failure handling without root and does not prove a root in-flight interruption.
 

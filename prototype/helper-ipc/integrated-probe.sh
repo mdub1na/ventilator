@@ -144,6 +144,12 @@ case "$action" in
         require_app "$@"
         [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
         ventilator --helper-request
+        baseline=$(ventilator --helper-baseline)
+        case "$baseline" in
+            *'"available":true'*'"baseline":true'* ) ;;
+            *) echo "root daemon did not confirm read-only system baseline: $baseline" >&2; exit 1 ;;
+        esac
+        echo "root-baseline=$baseline"
         scratch=$(dirname "$app")
         make helper-status
         valid_identity

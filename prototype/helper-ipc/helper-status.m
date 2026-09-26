@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#import "HelperBaselineValidation.h"
 #include <ctype.h>
 #include <unistd.h>
 
@@ -13,6 +14,11 @@
         @"smc_access": @NO,
         @"write_available": @NO
     });
+}
+
+- (void)fetchBaselineWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
+            @"available": @NO, @"reason": @"unsupported_provider"});
 }
 @end
 
@@ -62,7 +68,8 @@ static int serve(NSString *serviceName, NSString *clientRequirement) {
     return 0;
 }
 
-static int request(NSString *serviceName, NSString *serverRequirement) {
+static int request(NSString *serviceName, NSString *serverRequirement,
+                   BOOL signedDaemon, BOOL baseline) {
     NSError *error = nil;
     NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:serviceName options:0];
     connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
@@ -79,10 +86,17 @@ static int request(NSString *serviceName, NSString *serverRequirement) {
                 remoteError.localizedDescription.UTF8String);
         dispatch_semaphore_signal(done);
     }];
-    [remote fetchStatusWithReply:^(NSDictionary<NSString *, id> *status) {
-        result = status;
-        dispatch_semaphore_signal(done);
-    }];
+    if (baseline) {
+        [remote fetchBaselineWithReply:^(NSDictionary<NSString *, id> *snapshot) {
+            result = snapshot;
+            dispatch_semaphore_signal(done);
+        }];
+    } else {
+        [remote fetchStatusWithReply:^(NSDictionary<NSString *, id> *status) {
+            result = status;
+            dispatch_semaphore_signal(done);
+        }];
+    }
     long waitResult = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     [connection invalidate];
     if (waitResult != 0) {
@@ -90,10 +104,25 @@ static int request(NSString *serviceName, NSString *serverRequirement) {
         return 1;
     }
     if (requestError) return 1;
-    if (![result[@"protocol_version"] isEqual:@(HelperStatusProtocolVersion)] ||
-        ![result[@"state"] isEqual:@"read_only_prototype"] ||
-        ![result[@"smc_access"] isEqual:@NO] ||
-        ![result[@"write_available"] isEqual:@NO] || result.count != 4) {
+    if (![result isKindOfClass:NSDictionary.class] ||
+        ![result[@"protocol_version"] isEqual:@(HelperStatusProtocolVersion)]) {
+        fputs("XPC protocol version mismatch\n", stderr);
+        return 1;
+    }
+    if (baseline) {
+        if ([result[@"available"] isEqual:@NO] &&
+            [result[@"reason"] isKindOfClass:NSString.class]) {
+            fprintf(stderr, "XPC baseline unavailable: %s\n",
+                    [result[@"reason"] UTF8String]);
+            return 1;
+        }
+        if (!HelperBaselineResponseValid(result)) {
+            fputs("XPC baseline unavailable or contract mismatch\n", stderr);
+            return 1;
+        }
+    } else if (![result[@"state"] isEqual:@"read_only_prototype"] ||
+               ![result[@"smc_access"] isEqual:@(signedDaemon)] ||
+               ![result[@"write_available"] isEqual:@NO] || result.count != 4) {
         fputs("XPC status contract mismatch\n", stderr);
         return 1;
     }
@@ -125,15 +154,18 @@ static BOOL validTeamID(const char *team) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
-        if (argc == 4 && strcmp(argv[1], "request-signed") == 0 && validTeamID(argv[3])) {
+        if (argc == 4 && validTeamID(argv[3]) &&
+            (strcmp(argv[1], "request-signed") == 0 ||
+             strcmp(argv[1], "request-baseline-signed") == 0)) {
             NSString *requirement = [NSString stringWithFormat:
                 @"anchor apple generic and identifier \"com.ventilator.helper-ipc.signed-daemon\" and certificate leaf[subject.OU] = \"%s\"",
                 argv[3]];
-            return request([NSString stringWithUTF8String:argv[2]], requirement);
+            return request([NSString stringWithUTF8String:argv[2]], requirement,
+                           YES, strcmp(argv[1], "request-baseline-signed") == 0);
         }
         if (argc != 4 || !validCDHash(argv[3])) {
             fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME EXPECTED_PEER_CDHASH\n"
-                    "   or: %s request-signed MACH_SERVICE_NAME EXPECTED_DAEMON_TEAM_ID\n", argv[0], argv[0]);
+                    "   or: %s request-signed|request-baseline-signed MACH_SERVICE_NAME EXPECTED_DAEMON_TEAM_ID\n", argv[0], argv[0]);
             return 2;
         }
         NSString *serviceName = [NSString stringWithUTF8String:argv[2]];
@@ -145,7 +177,7 @@ int main(int argc, const char *argv[]) {
             }
             return serve(serviceName, peerRequirement);
         }
-        if (strcmp(argv[1], "request") == 0) return request(serviceName, peerRequirement);
+        if (strcmp(argv[1], "request") == 0) return request(serviceName, peerRequirement, NO, NO);
         fputs("unknown operation\n", stderr);
         return 2;
     }
