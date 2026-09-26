@@ -230,6 +230,11 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
                      backend->monotonic_seconds(backend->context) - started < 5.0 &&
                      !backend->should_stop(backend->context);
     if (!trial_restore_unlock(backend)) return TRIAL_RUN_RESTORE_FAILED;
+    // The SMC accepted Ftst=1 on Mac15,7 before a read showed Ftst=0. A
+    // baseline read here cannot rule out an effect after this process exits.
+    if (write_ok && (!observed || unlocked.ftst != 1)) {
+        return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
+    }
     return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
 }
 

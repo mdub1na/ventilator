@@ -1024,6 +1024,16 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
         print_ftst_readback(&backend, "post_failure", stderr);
         return EXIT_FAILURE;
     }
+    if (status == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED) {
+        fflush(stdout);
+        fputs("CRITICAL: accepted Ftst write was not observed; delayed change is possible. "
+              "Do not treat the current baseline as restored; observe independently and "
+              "use emergency recovery if it changes.\n", stderr);
+        fflush(stderr);
+        print_buffered_events(&live, stderr);
+        print_ftst_readback(&backend, "post_failure", stderr);
+        return EXIT_FAILURE;
+    }
     print_buffered_events(&live, stdout);
     print_ftst_readback(&backend, "final", stdout);
     if (status == TRIAL_RUN_BASELINE_REJECTED) {

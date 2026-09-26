@@ -14,6 +14,8 @@ typedef struct {
     bool reject_zero_targets;
     bool fail_ftst_enable;
     bool apply_ftst_on_error;
+    bool delay_ftst_enable;
+    bool pending_ftst_enable;
     bool fail_ftst_release;
     bool fail_auto;
     bool unexpected_manual_after_unlock;
@@ -71,6 +73,10 @@ static bool mock_write_ftst(void *context, uint8_t value) {
         if (mock->apply_ftst_on_error) mock->ftst = 1;
         return false;
     }
+    if (value == 1 && mock->delay_ftst_enable) {
+        mock->pending_ftst_enable = true;
+        return true;
+    }
     if (value == 0 && mock->fail_ftst_release) return false;
     mock->ftst = value;
     if (value == 1 && mock->unexpected_manual_after_unlock) mock->modes[0] = 1;
@@ -97,6 +103,14 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
 static bool mock_wait(void *context, unsigned milliseconds) {
     MockBackend *mock = context;
     mock->now += milliseconds / 1000.0;
+    if (mock->pending_ftst_enable && mock->now >= 1.0) {
+        mock->pending_ftst_enable = false;
+        mock->ftst = 1;
+        mock->modes[0] = 0;
+        mock->modes[1] = 0;
+        mock->targets[0] = 1350;
+        mock->targets[1] = 1458;
+    }
     return true;
 }
 
@@ -197,6 +211,20 @@ static void ftst_rejection_leaves_baseline_without_cleanup_writes(void) {
     TrialBackend backend = backend_for(&mock);
     assert(trial_check_ftst(&backend) == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
     assert(strcmp(mock.writes, "Ftst=1;") == 0);
+}
+
+static void accepted_ftst_with_delayed_effect_never_verifies_immediate_baseline(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;") == 0);
+    assert(mock.ftst == 0 && mock.pending_ftst_enable);
+    assert(mock_wait(&mock, 1000));
+    TrialObservation delayed = {0};
+    assert(mock_read(&mock, false, &delayed));
+    assert(!trial_observation_is_baseline(&delayed));
+    assert(delayed.ftst == 1 && delayed.mode[0] == 0 && delayed.mode[1] == 0);
+    assert(delayed.target_rpm[0] == 1350 && delayed.target_rpm[1] == 1458);
 }
 
 static void ftst_error_with_changed_readback_still_clears_unlock(void) {
@@ -397,6 +425,7 @@ int main(void) {
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
     ftst_rejection_leaves_baseline_without_cleanup_writes();
+    accepted_ftst_with_delayed_effect_never_verifies_immediate_baseline();
     ftst_error_with_changed_readback_still_clears_unlock();
     independent_restore_clears_ftst_after_unchanged_modes();
     interruption_after_unlock_still_restores_ftst();
