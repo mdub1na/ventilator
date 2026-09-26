@@ -311,11 +311,10 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
         return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
     }
 
-    // A successful write may become visible only after the first read. Issue
-    // the matching release even when all ten seconds still looked unchanged.
-    if (write_ok && !backend->write_ftst(backend->context, 0)) {
-        return TRIAL_RUN_RESTORE_FAILED;
-    }
+    // An unsuccessful transport response does not prove that the command was
+    // discarded by SMC. Issue the release for either result and keep watching
+    // even if that release also reports failure.
+    bool release_ok = backend->write_ftst(backend->context, 0);
     TrialBaselineResult later = trial_observe_after_ftst(backend);
     if (later.status != TRIAL_BASELINE_STABLE) {
         if (!trial_restore_unlock(backend) ||
@@ -323,6 +322,7 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
             return TRIAL_RUN_RESTORE_FAILED;
         }
     }
+    if (!release_ok) return TRIAL_RUN_RESTORE_FAILED;
     // Even a stable minute cannot exclude an effect after this process exits.
     return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
 }
