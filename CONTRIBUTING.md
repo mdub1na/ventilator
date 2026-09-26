@@ -32,6 +32,7 @@ make -C prototype/login-item build
 make -C prototype/smc-write-trial clean build test
 make -C prototype/helper-ipc smoke
 make -C prototype/helper-ipc package-smoke
+make -C prototype/helper-ipc control-lease-test
 ```
 
 Сборка и тесты `smc-write-trial` не требуют записи в SMC. Не запускайте его команды `--apply` как обычную проверку PR. Новые аппаратные пробы заблокированы после [случая с `Ftst`](docs/features/ftst-check-trial.md); прямая проба и её исходный допуск записаны в [отдельном протоколе](docs/features/manual-fan-control-trial.md). Команды восстановления остаются аварийными и не входят в тесты.
