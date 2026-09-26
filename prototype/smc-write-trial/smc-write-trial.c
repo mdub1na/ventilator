@@ -770,6 +770,54 @@ static bool install_signal_handlers(void) {
            sigaction(SIGQUIT, &action, NULL) == 0;
 }
 
+typedef struct {
+    Smc *smc;
+    double sample_time;
+} BaselineObserverContext;
+
+static bool baseline_observer_read(void *context, TrialObservation *observation) {
+    BaselineObserverContext *observer = context;
+    LiveSnapshot snapshot = {0};
+    observer->sample_time = monotonic_seconds();
+    if (observer->sample_time < 0 ||
+        !read_snapshot(observer->smc, &snapshot, true, true) ||
+        !read_ui8_exact(&snapshot.ftst, &observation->ftst)) return false;
+    for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+        if (!read_ui8_exact(&snapshot.fans[fan].mode, &observation->mode[fan]) ||
+            !read_number(&snapshot.fans[fan].actual, &observation->actual_rpm[fan]) ||
+            !read_number(&snapshot.fans[fan].target, &observation->target_rpm[fan])) return false;
+    }
+    memcpy(observation->temperatures_c, snapshot.temperatures_c,
+           sizeof(observation->temperatures_c));
+    return true;
+}
+
+static bool baseline_observer_wait(void *context, unsigned milliseconds) {
+    (void)context;
+    return sleep_milliseconds(milliseconds);
+}
+
+static bool baseline_observer_stopped(void *context) {
+    (void)context;
+    return interrupted != 0;
+}
+
+static void baseline_observer_record(
+    void *context, unsigned second, const TrialObservation *observation) {
+    BaselineObserverContext *observer = context;
+    printf("{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
+           "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
+           "\"target\":[%.0f,%.0f],\"TCMz\":%.2f,\"Tg0D\":%.2f,\"TH0a\":%.2f,"
+           "\"baseline\":%s}\n",
+           observer->sample_time, second, observation->mode[0], observation->mode[1],
+           observation->ftst, observation->actual_rpm[0], observation->actual_rpm[1],
+           observation->target_rpm[0], observation->target_rpm[1],
+           observation->temperatures_c[0], observation->temperatures_c[1],
+           observation->temperatures_c[2],
+           trial_observation_is_baseline(observation) ? "true" : "false");
+    fflush(stdout);
+}
+
 static int run_observe_baseline(Smc *smc) {
     enum { OBSERVE_BASELINE_SECONDS = 60 };
     char model[32] = {0};
@@ -779,57 +827,30 @@ static int run_observe_baseline(Smc *smc) {
         fputs("cannot install signal handlers for read-only observer\n", stderr);
         return EXIT_FAILURE;
     }
-
-    for (unsigned second = 0; second <= OBSERVE_BASELINE_SECONDS; ++second) {
-        LiveSnapshot snapshot = {0};
-        TrialObservation observation = {0};
-        double time = monotonic_seconds();
-        bool read_ok = time >= 0 && read_snapshot(smc, &snapshot, true, true) &&
-                       read_ui8_exact(&snapshot.ftst, &observation.ftst);
-        for (unsigned fan = 0; read_ok && fan < TRIAL_FAN_COUNT; ++fan) {
-            read_ok = read_ui8_exact(&snapshot.fans[fan].mode, &observation.mode[fan]) &&
-                      read_number(&snapshot.fans[fan].actual, &observation.actual_rpm[fan]) &&
-                      read_number(&snapshot.fans[fan].target, &observation.target_rpm[fan]);
-        }
-        if (!read_ok) {
-            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"read_failed\"}\n", second);
-            fflush(stdout);
-            return EXIT_FAILURE;
-        }
-        if (interrupted) {
-            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"interrupted\"}\n",
-                   second);
-            fflush(stdout);
-            return EXIT_FAILURE;
-        }
-        memcpy(observation.temperatures_c, snapshot.temperatures_c,
-               sizeof(observation.temperatures_c));
-        bool baseline = trial_observation_is_baseline(&observation);
-        printf("{\"event\":\"observe\",\"time\":%.6f,\"second\":%u,"
-               "\"mode\":[%u,%u],\"Ftst\":%u,\"actual\":[%.0f,%.0f],"
-               "\"target\":[%.0f,%.0f],\"TCMz\":%.2f,\"Tg0D\":%.2f,\"TH0a\":%.2f,"
-               "\"baseline\":%s}\n",
-               time, second, observation.mode[0], observation.mode[1], observation.ftst,
-               observation.actual_rpm[0], observation.actual_rpm[1],
-               observation.target_rpm[0], observation.target_rpm[1],
-               observation.temperatures_c[0], observation.temperatures_c[1],
-               observation.temperatures_c[2], baseline ? "true" : "false");
-        fflush(stdout);
-        if (!baseline) {
-            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"baseline_changed\"}\n",
-                   second);
-            fflush(stdout);
-            return EXIT_FAILURE;
-        }
-        if (second < OBSERVE_BASELINE_SECONDS && !sleep_milliseconds(1000)) {
-            printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"interrupted\"}\n",
-                   second);
-            fflush(stdout);
-            return EXIT_FAILURE;
-        }
+    BaselineObserverContext context = {.smc = smc};
+    TrialBaselineObserver observer = {
+        .context = &context,
+        .read_observation = baseline_observer_read,
+        .wait_milliseconds = baseline_observer_wait,
+        .should_stop = baseline_observer_stopped,
+        .record_observation = baseline_observer_record,
+    };
+    TrialBaselineResult result = trial_observe_baseline_window(
+        &observer, OBSERVE_BASELINE_SECONDS);
+    if (result.status == TRIAL_BASELINE_STABLE) {
+        printf("{\"event\":\"complete\",\"samples\":%u,\"status\":\"stable\"}\n",
+               result.samples);
+        return EXIT_SUCCESS;
     }
-    puts("{\"event\":\"complete\",\"samples\":61,\"status\":\"stable\"}");
-    return EXIT_SUCCESS;
+    const char *reason = result.status == TRIAL_BASELINE_CHANGED ? "baseline_changed" :
+                         result.status == TRIAL_BASELINE_READ_FAILED ? "read_failed" :
+                         result.status == TRIAL_BASELINE_WAIT_FAILED ? "wait_failed" :
+                         result.status == TRIAL_BASELINE_INTERRUPTED ? "interrupted" :
+                         "internal_error";
+    printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"%s\"}\n",
+           result.second, reason);
+    fflush(stdout);
+    return EXIT_FAILURE;
 }
 
 static int run_trial(Smc *smc, const char *program, bool apply) {
