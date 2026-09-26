@@ -18,6 +18,7 @@ static void require_recovery(ControlLease *lease) {
     lease->state = CONTROL_LEASE_RECOVERY_REQUIRED;
     lease->owner = 0;
     lease->expires_at_ns = 0;
+    lease->recovery_verified = false;
 }
 
 void control_lease_start(ControlLease *lease, ControlIntentStatus intent,
@@ -58,6 +59,7 @@ void control_lease_sample(ControlLease *lease, SmcBaselineResult result,
     }
     if (lease->samples >= CONTROL_LEASE_REQUIRED_SAMPLES &&
         now_ns - lease->observation_started_ns >= CONTROL_LEASE_BASELINE_NS) {
+        lease->recovery_verified = lease->state == CONTROL_LEASE_VERIFYING_RECOVERY;
         lease->state = CONTROL_LEASE_STABLE;
         lease->write_pending = false;
         lease->owner = 0;
@@ -107,6 +109,13 @@ bool control_lease_mark_write_pending(ControlLease *lease, uint64_t owner,
     return true;
 }
 
+bool control_lease_prepare_persistent_intent(ControlLease *lease) {
+    if (lease == NULL || lease->state != CONTROL_LEASE_HELD ||
+        lease->owner == 0 || lease->write_pending) return false;
+    lease->recovery_verified = false;
+    return true;
+}
+
 bool control_lease_renew(ControlLease *lease, uint64_t owner, uint64_t now_ns,
                          ControlIntentStatus intent, SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot) {
@@ -153,11 +162,25 @@ void control_lease_recovery_started(ControlLease *lease, SmcBaselineResult resul
     if (now_ns == 0 || !valid_read(result, snapshot)) {
         lease->state = CONTROL_LEASE_READ_FAILED;
     } else if (smc_baseline_is_system(snapshot)) {
+        lease->recovery_verified = false;
         lease->state = CONTROL_LEASE_VERIFYING_RECOVERY;
         lease->observation_started_ns = now_ns;
         lease->last_sample_ns = now_ns;
         lease->samples = 1;
     }
+}
+
+bool control_lease_take_recovery_proof(ControlLease *lease) {
+    if (lease == NULL || lease->state != CONTROL_LEASE_STABLE ||
+        !lease->recovery_verified || lease->write_pending ||
+        lease->owner != 0 || lease->expires_at_ns != 0 ||
+        lease->samples < CONTROL_LEASE_REQUIRED_SAMPLES ||
+        lease->last_sample_ns < lease->observation_started_ns ||
+        lease->last_sample_ns - lease->observation_started_ns < CONTROL_LEASE_BASELINE_NS) {
+        return false;
+    }
+    lease->recovery_verified = false;
+    return true;
 }
 
 const char *control_lease_state_name(ControlLeaseState state) {

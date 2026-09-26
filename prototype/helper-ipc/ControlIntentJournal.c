@@ -1,4 +1,5 @@
 #include "ControlIntentJournal.h"
+#include "ControlLease.h"
 
 #include <errno.h>
 #include <fcntl.h>
@@ -46,7 +47,8 @@ ControlIntentStatus control_intent_read(int directory_fd) {
     return result;
 }
 
-bool control_intent_mark_pending(int directory_fd) {
+bool control_intent_mark_pending(int directory_fd, struct ControlLease *lease) {
+    if (!control_lease_prepare_persistent_intent(lease)) return false;
     if (control_intent_read(directory_fd) != CONTROL_INTENT_CLEAR) return false;
     int marker = openat(directory_fd, marker_name,
                         O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW, 0600);
@@ -67,8 +69,9 @@ bool control_intent_mark_pending(int directory_fd) {
     return durable;
 }
 
-bool control_intent_clear_verified(int directory_fd) {
+bool control_intent_clear_verified(int directory_fd, struct ControlLease *lease) {
     if (control_intent_read(directory_fd) != CONTROL_INTENT_PENDING) return false;
+    if (!control_lease_take_recovery_proof(lease)) return false;
     if (unlinkat(directory_fd, marker_name, 0) != 0) return false;
     return fsync(directory_fd) == 0;
 }

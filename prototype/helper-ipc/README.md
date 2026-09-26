@@ -8,7 +8,7 @@ The ad hoc status server returns protocol version `1`, `read_only_prototype`, an
 
 `make control-lease-test` runs a separate pure C reducer against simulated startup, client loss, daemon restart, timeout, sleep, temperature and recovery samples. It models a possible future ownership boundary but is not linked into `daemon-status`; no control method or SMC writer is exposed by this test.
 
-`make control-intent-test` creates a fixed pending marker in a private test directory, closes and reopens it, and checks that a new lease refuses to proceed until recovery clears the marker. Corrupt files, symlinks and writable directories fail closed. The journal and lease model remain outside `daemon-status`; this test neither writes SMC nor proves a real recovery protocol.
+`make control-intent-test` creates a fixed pending marker in a private test directory, closes and reopens it, and checks that a new lease refuses to proceed until a full simulated recovery produces one use of clearance proof. Early and repeated clearance, corrupt files, symlinks and writable directories fail closed. The journal and lease model remain outside `daemon-status`; this test neither writes SMC nor proves a real recovery protocol.
 
 The three fixed temperature slots (`TCMz`, `Tg0D`, `TH0a`) contain a number only in the working 10–115 °C range. A finite reading outside that range becomes JSON `null` at its own slot in baseline, startup audit and watcher replies. This keeps fan-control state visible while marking the sensor unavailable. Client validators reject a raw out-of-range number. An actual SMC read error still fails the complete snapshot.
 
