@@ -31,6 +31,14 @@ object HelperProbeCommand {
                     println(native.requestBaselineNative())
                     0
                 }
+                "--helper-watch-start" -> {
+                    println(native.startWatchNative())
+                    0
+                }
+                "--helper-watch-status" -> {
+                    println(native.watchStatusNative())
+                    0
+                }
                 "--helper-unregister" -> {
                     val status = native.registrationStatusNative()
                     if (status != "notRegistered" && status != "notFound") native.setRegisteredNative(false)
@@ -55,4 +63,6 @@ internal class HelperProbeNative(path: Path) {
     external fun setRegisteredNative(registered: Boolean): String
     external fun requestStatusNative(): String
     external fun requestBaselineNative(): String
+    external fun startWatchNative(): String
+    external fun watchStatusNative(): String
 }

@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#import "BaselineWatchController.h"
 #include "SmcBaselineRead.h"
 #include <ctype.h>
 #include <time.h>
@@ -45,6 +46,14 @@
             @"temperatures_c": @[@(snapshot.temperatures_c[0]),
                                   @(snapshot.temperatures_c[1]),
                                   @(snapshot.temperatures_c[2])]});
+}
+
+- (void)startBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[BaselineWatchController shared] start]);
+}
+
+- (void)fetchBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[BaselineWatchController shared] status]);
 }
 @end
 

@@ -22,9 +22,9 @@ make report
 ### Research (2)
 
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
-- [x] [research-helper-boundary](research/research-helper-boundary.md) — проверенные свойства macOS и поэтапный проект границы helper для M2-02; привилегированный helper ещё не реализован.
+- [x] [research-helper-boundary](research/research-helper-boundary.md) — проверенные свойства macOS и граница read-only helper для M2-02; аппаратное восстановление ещё не реализовано.
 
-### Features (6)
+### Features (7)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
@@ -32,6 +32,7 @@ make report
 - [ ] [ftst-check-trial](features/ftst-check-trial.md) — запись `Ftst` выявила отложенное изменение; восстановление не подтвердилось, новые пробы заблокированы.
 - [x] [baseline-observer](features/baseline-observer.md) — независимое чтение исходного состояния в течение минуты после инцидента `Ftst`; проверено на `Mac15,7`.
 - [x] [helper-status-ipc](features/helper-status-ipc.md) — пользовательский XPC обмен фиксированным read-only статусом и удаление временной службы.
+- [x] [helper-baseline-watch](features/helper-baseline-watch.md) — минутное read-only наблюдение в UID 0 helper после выхода клиента, проверенное на `Mac15,7`.
 
 ### Screens / Flows (2)
 
