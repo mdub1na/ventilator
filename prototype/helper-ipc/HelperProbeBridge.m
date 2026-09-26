@@ -97,7 +97,8 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_reque
         NSString *requirement = [NSString stringWithFormat:
             @"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",
             DaemonIdentifier, team];
-        NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:ServiceName options:0];
+        NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:ServiceName
+            options:NSXPCConnectionPrivileged];
         connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
         [connection setCodeSigningRequirement:requirement];
         [connection resume];

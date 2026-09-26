@@ -28,8 +28,10 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 
 ```sh
 ./integrated-probe.sh status "$APP"
+./client-lifecycle-smoke.sh "$APP" # before root daemon registration
 ./integrated-probe.sh register "$APP"
 ./integrated-probe.sh check "$APP"
+./integrated-probe.sh ui-crash "$APP"
 ./integrated-probe.sh restart-before "$APP"
 # In a separate Terminal, run the sudo launchctl kill command printed above.
 ./integrated-probe.sh restart-after "$APP"
@@ -41,6 +43,10 @@ For the main-app integration probe, run `./integrated-probe.sh prepare` from thi
 ```
 
 If macOS reports `requiresApproval`, approve the new Ventilator background item in System Settings before `check`. `check` requests the exact four-field status from the **main app process**, rejects an ad hoc client and another signed identifier, then confirms a UID 0 system service. If any step fails, keep the package until `unregister` confirms `notRegistered` and `launchctl` absence. Normal UI launches never register or query this experimental daemon. No SMC writer is bundled.
+
+Before registration, `client-lifecycle-smoke.sh` temporarily advertises the same Mach service name in the **user** bootstrap domain with the correctly signed daemon. Its signed control client must reach that service, while the main app must reject it because its `NSXPCConnection` uses `NSXPCConnectionPrivileged`. The script then suspends the user daemon during a request, kills it, requires that request to fail, explicitly restarts the daemon, and requires a fresh request to succeed. It removes the LaunchAgent even on failure; a `CRITICAL` removal error retains the plist for investigation. This tests client failure handling without root and does not prove a root in-flight interruption.
+
+After the root daemon is enabled, `ui-crash` launches only this temporary signed UI, kills its exact process, verifies its status item child exits, and requires the same root daemon PID and a new trusted XPC response. The temporary app may briefly show its window and menu-bar icon. It does not alter the ordinary installed Ventilator app.
 
 If the background switch is on but the status remains `requiresApproval`, run `unregister`, wait for that operation to settle, then run `register` again and check for `enabled`. This sequence was needed for the second local probe. Never delete the signed package while a registration is pending; `cleanup` checks that it was removed. Apple DTS also describes a delay after `SMAppService.unregister` before re-registration in [this discussion](https://developer.apple.com/forums/thread/783539).
 
