@@ -1066,7 +1066,7 @@ static int run_restore_unlock(Smc *smc, bool apply) {
     print_plan(apply ? "restore-unlock-apply" : "restore-unlock-dry-run",
                model, os_version, &current, NULL);
     if (!apply) {
-        puts("dry-run complete: restore-unlock would release fan modes/targets if needed, then clear Ftst");
+        puts("dry-run complete: restore-unlock would release manual modes, clear Ftst, then observe the baseline for 60 seconds");
         return EXIT_SUCCESS;
     }
     if (geteuid() != 0) {
@@ -1088,7 +1088,7 @@ static int run_restore_unlock(Smc *smc, bool apply) {
     }
     print_buffered_events(&live, stdout);
     print_ftst_readback(&backend, "final", stdout);
-    puts("system mode, zero targets and Ftst=0 verified");
+    puts("local 60-second baseline verified; confirm with an independent read-only process");
     return EXIT_SUCCESS;
 }
 

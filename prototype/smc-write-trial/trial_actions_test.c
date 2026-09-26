@@ -17,6 +17,10 @@ typedef struct {
     bool delay_ftst_enable;
     bool pending_ftst_enable;
     bool fail_ftst_release;
+    bool delay_ftst_release;
+    bool pending_ftst_release;
+    bool reclaim_on_ftst_release;
+    bool relatch_after_release;
     bool fail_auto;
     bool unexpected_manual_after_unlock;
     bool stop_after_unlock;
@@ -28,6 +32,7 @@ typedef struct {
     uint8_t ftst;
     double targets[TRIAL_FAN_COUNT];
     bool restoring;
+    bool released_ftst;
 } MockBackend;
 
 static void append_write(MockBackend *mock, const char *text) {
@@ -78,13 +83,24 @@ static bool mock_write_ftst(void *context, uint8_t value) {
         return true;
     }
     if (value == 0 && mock->fail_ftst_release) return false;
+    if (value == 0 && mock->delay_ftst_release) {
+        mock->pending_ftst_release = true;
+        return true;
+    }
     mock->ftst = value;
+    if (value == 0) mock->released_ftst = true;
     if (value == 1 && mock->unexpected_manual_after_unlock) mock->modes[0] = 1;
     return true;
 }
 
 static bool mock_read(void *context, bool temperatures, TrialObservation *output) {
     MockBackend *mock = context;
+    if (mock->released_ftst && mock->reclaim_on_ftst_release) {
+        mock->modes[0] = 3;
+        mock->modes[1] = 3;
+        mock->targets[0] = 0;
+        mock->targets[1] = 0;
+    }
     output->ftst = mock->ftst;
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if (mock->restoring) mock->modes[fan] = 3;
@@ -103,8 +119,20 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
 static bool mock_wait(void *context, unsigned milliseconds) {
     MockBackend *mock = context;
     mock->now += milliseconds / 1000.0;
+    if (mock->pending_ftst_release && mock->now >= 3.0) {
+        mock->pending_ftst_release = false;
+        mock->released_ftst = true;
+        mock->ftst = 0;
+    }
     if (mock->pending_ftst_enable && mock->now >= 1.0) {
         mock->pending_ftst_enable = false;
+        mock->ftst = 1;
+        mock->modes[0] = 0;
+        mock->modes[1] = 0;
+        mock->targets[0] = 1350;
+        mock->targets[1] = 1458;
+    }
+    if (mock->relatch_after_release && mock->released_ftst && mock->now >= 2.0) {
         mock->ftst = 1;
         mock->modes[0] = 0;
         mock->modes[1] = 0;
@@ -269,22 +297,52 @@ static void ftst_is_not_cleared_while_a_fan_remains_manual(void) {
     assert(mock.ftst == 1 && mock.modes[0] == 1);
 }
 
-static void ftst_restore_stops_when_minimum_targets_cannot_be_zeroed(void) {
+static void ftst_restore_allows_firmware_minimum_targets_before_release(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .targets = {1350, 1458}, .reject_zero_targets = true,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.targets[0] == 0 && mock.targets[1] == 0);
+    assert(mock.now >= 60.0);
+}
+
+static void ftst_release_without_system_takeover_is_not_verified(void) {
     MockBackend mock = {.modes = {0, 0}, .ftst = 1,
                         .targets = {1350, 1458}, .reject_zero_targets = true};
     TrialBackend backend = backend_for(&mock);
     assert(!trial_restore_unlock(&backend));
-    assert(strstr(mock.writes, "T0=0;") != NULL);
-    assert(strstr(mock.writes, "T1=0;") != NULL);
-    assert(strstr(mock.writes, "Ftst=0;") == NULL);
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 0 && mock.modes[1] == 0);
+    assert(mock.now >= 90.0);
+}
+
+static void delayed_ftst_release_waits_for_readback_and_stable_window(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .targets = {1350, 1458}, .delay_ftst_release = true,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.now >= 63.0);
+}
+
+static void ftst_release_relatched_during_observation_is_not_verified(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .targets = {1350, 1458}, .reclaim_on_ftst_release = true,
+                        .relatch_after_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
     assert(mock.ftst == 1);
+    assert(mock.now < 60.0);
 }
 
 static void ftst_unexpected_manual_mode_releases_fans_first(void) {
     MockBackend mock = {.modes = {3, 3}, .unexpected_manual_after_unlock = true};
     TrialBackend backend = backend_for(&mock);
     assert(trial_check_ftst(&backend) == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
-    assert(strcmp(mock.writes, "Ftst=1;M0=0;T0=0;M1=0;T1=0;Ftst=0;") == 0);
+    assert(strcmp(mock.writes, "Ftst=1;M0=0;Ftst=0;") == 0);
     assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
 }
 
@@ -431,7 +489,10 @@ int main(void) {
     interruption_after_unlock_still_restores_ftst();
     ftst_release_failure_requires_independent_recovery();
     ftst_is_not_cleared_while_a_fan_remains_manual();
-    ftst_restore_stops_when_minimum_targets_cannot_be_zeroed();
+    ftst_restore_allows_firmware_minimum_targets_before_release();
+    ftst_release_without_system_takeover_is_not_verified();
+    delayed_ftst_release_waits_for_readback_and_stable_window();
+    ftst_release_relatched_during_observation_is_not_verified();
     ftst_unexpected_manual_mode_releases_fans_first();
     ftst_check_rejects_nonbaseline_before_first_write();
     ftst_check_rejects_hot_reading_before_first_write();
