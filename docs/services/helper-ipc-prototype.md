@@ -7,7 +7,7 @@ module: prototype/helper-ipc
 tech_stack: [Kotlin/JVM, Objective-C, JNI, Foundation, Security, ServiceManagement, NSXPCConnection, launchd, macOS]
 owner: unassigned
 depends_on: [Foundation, launchd]
-publishes: [fixed local XPC status]
+publishes: [fixed local XPC status, fixed-key read-only SMC snapshot]
 ---
 
 # Прототип XPC статуса helper
@@ -16,13 +16,13 @@ publishes: [fixed local XPC status]
 
 `helper-status` в режиме `serve` создаёт именованный `NSXPCListener` с одним методом без входных аргументов. Режим `request` подключается через `NSXPCConnection`, проверяет точный ответ и выводит JSON. Smoke-проба передаёт `cdhash` временных ad hoc копий. `serve` отказывает в работе от root.
 
-Отдельный `daemon-status` предоставляет тот же фиксированный статус и принимает только клиента с Apple anchor, точным code identifier и Team ID. Подписанный `helper-status request-signed` требует такую же идентичность daemon. Этот процесс проверен в системном домене с UID 0, но не линкует IOKit или writer и не обращается к AppleSMC. Он не входит в основной `Ventilator.app`.
+Отдельный `daemon-status` предоставляет фиксированный статус и запрос снимка по заранее заданным SMC-ключам; он принимает только клиента с Apple anchor, точным code identifier и Team ID. Подписанный `helper-status request-signed` требует такую же идентичность daemon. Прежняя проверка системного процесса с UID 0 относилась к версии без доступа к AppleSMC. Новая версия линкует IOKit, но в её модуле `SmcBaselineRead.c` есть только команды чтения `5` и `9`, а SMC writer не включён. Она не входит в основной установленный `Ventilator.app`.
 
-Для проверки интеграции `HelperProbeBridge.m` загружается из основного JVM-процесса упакованного `Ventilator.app`. Мост читает Team ID собственной подписи через Security framework, требует точный identifier daemon и предоставляет только статус регистрации, явную регистрацию/отмену и `fetchStatusWithReply`. Команды доступны диагностическому CLI; обычный запуск окна не обращается к daemon. `integrated-probe.sh` добавляет daemon в отдельную подписанную копию приложения, не в установленный пользовательский пакет.
+Для проверки интеграции `HelperProbeBridge.m` загружается из основного JVM-процесса упакованного `Ventilator.app`. Мост читает Team ID собственной подписи через Security framework, требует точный identifier daemon и предоставляет только статус регистрации, явную регистрацию/отмену, `fetchStatusWithReply` и `fetchBaselineWithReply`. Команды доступны диагностическому CLI; обычный запуск окна не обращается к daemon. `integrated-probe.sh` добавляет daemon в отдельную подписанную копию приложения, не в установленный пользовательский пакет.
 
 ## 2. Contract
 
-Метод `fetchStatusWithReply` возвращает четыре поля: `protocol_version: 1`, `state: read_only_prototype`, `smc_access: false`, `write_available: false`. Никаких параметров у метода нет. Для ad hoc `serve` и `request` CLI требует 40-значный ожидаемый `cdhash` peer. Для `request-signed` и `daemon-status` нужен 10-значный Team ID; первый также закрепляет идентификатор daemon, второй — идентификатор клиента. Ошибка XPC, другая версия, иное содержимое или ожидание более 5 секунд отклоняются клиентом. Это локальный протокол, не HTTP API.
+Метод `fetchStatusWithReply` возвращает четыре поля: `protocol_version: 1`, `state: read_only_prototype`, `smc_access` и `write_available: false`. Для ad hoc сервера `smc_access=false`, для подписанного daemon с read-only reader — `true`. Метод `fetchBaselineWithReply` не принимает параметров; daemon читает только `FNum`, `Ftst`, режимы, цели и фактические RPM двух вентиляторов, `TCMz`, `Tg0D`, `TH0a`. При ошибке он возвращает `available=false` и ограниченный код причины, а клиент отвергает снимок. При успехе ответ содержит `available=true`, модель/ОС, монотонное время чтения, исходное состояние и фиксированные массивы значений. Исходное состояние: `Ftst=0`, режимы `[3,3]`, обе цели не выше 1 RPM. Для ad hoc `serve` и `request` CLI требует 40-значный ожидаемый `cdhash` peer. Для подписанного клиента и daemon нужен 10-значный Team ID и точные идентификаторы. Ошибка XPC, другая версия, иное содержимое или ожидание более 5 секунд отклоняются клиентом. Это локальный протокол, не HTTP API.
 
 ## 3. Code anchors
 
@@ -35,6 +35,8 @@ publishes: [fixed local XPC status]
 | `prototype/helper-ipc/agent-registration.m` | вызовы `SMAppService.agent` из тестового `.app` |
 | `prototype/helper-ipc/package-smoke.sh` | сборка временного пакета, регистрация, XPC и удаление |
 | `prototype/helper-ipc/daemon-status.m` | отдельный ограниченный read-only daemon |
+| `prototype/helper-ipc/SmcBaselineRead.c` | фиксированный SMC reader и критерий исходного состояния |
+| `prototype/helper-ipc/HelperBaselineValidation.h` | проверка формы XPC снимка и независимый пересчёт `baseline` на стороне клиентов |
 | `prototype/helper-ipc/daemon-registration.m` | вызовы `SMAppService.daemon` из тестового `.app` |
 | `prototype/helper-ipc/daemon-probe.sh` | подписанный пакет, регистрация, проверка и удаление |
 | `prototype/helper-ipc/signed-ipc-smoke.sh` | проверка подписанного IPC в пользовательском домене |
@@ -50,7 +52,7 @@ publishes: [fixed local XPC status]
 
 `make -C prototype/helper-ipc package-smoke` строит отдельный ad hoc подписанный `HelperProbe.app`. В нём helper находится в `Contents/Resources`, а plist с относительным `BundleProgram` — в `Contents/Library/LaunchAgents`, как описывает [Apple для SMAppService](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos). Тестовый app вызывает `SMAppService.agent(plistName:)`, регистрирует и отменяет регистрацию, затем скрипт подтверждает `notRegistered` и отсутствие службы. На `Mac15,7`/macOS 27.0 наблюдались `notFound → enabled → notRegistered`, успешный XPC ответ и удаление пакета. Это не упаковка `Ventilator.app` и не системный LaunchDaemon.
 
-`make -C prototype/helper-ipc daemon-prepare` строит отдельный `HelperDaemonProbe.app` с LaunchDaemon plist. Скрипт выбирает локальный Apple Development сертификат, который проходит `codesign --verify --strict`; имя и Team ID в репозитории не хранятся. Он проверяет подписи пакета и клиентов и выдаёт путь к пакету. Дальше `daemon-probe.sh register APP`, `status APP`, `check APP`, `unregister APP` и `cleanup APP` выполняются явно. `check` делает два запроса доверенным клиентом, проверяет отказ ad hoc клиента и клиента с тем же Team ID, но другим identifier, а также наличие системной службы. `cleanup` отказывает в удалении пакета, пока служба зарегистрирована или видна в `launchctl`. `signed-ipc-smoke.sh APP` использует тот же подписанный daemon в пользовательском домене и автоматически удаляет временный LaunchAgent.
+`make -C prototype/helper-ipc daemon-prepare` строит отдельный `HelperDaemonProbe.app` с LaunchDaemon plist. Скрипт выбирает локальный Apple Development сертификат, который проходит `codesign --verify --strict`; имя и Team ID в репозитории не хранятся. Он проверяет подписи пакета и клиентов и выдаёт путь к пакету. Дальше `daemon-probe.sh register APP`, `status APP`, `check APP`, `unregister APP` и `cleanup APP` выполняются явно. `check` запрашивает статус и фиксированный SMC снимок доверенным клиентом, проверяет отказ ad hoc клиента и клиента с тем же Team ID, но другим identifier, а также наличие системной службы. `cleanup` отказывает в удалении пакета, пока служба зарегистрирована или видна в `launchctl`. `signed-ipc-smoke.sh APP` использует тот же подписанный daemon в пользовательском домене и автоматически удаляет временный LaunchAgent.
 
 На `Mac15,7`/macOS 27.0 первый `register` вернул `Operation not permitted` и `requiresApproval`. После разрешения macOS статус стал `enabled`, системный daemon работал с UID 0, оба доверенных запроса прошли, ad hoc клиент был отклонён. Повторный запуск пробы также отклонил другого подписанного клиента. `unregister` оба раза вернул `notRegistered`; служба отсутствовала в `launchctl`, оба пакета удалены. Это не проверка обновления, распространения или основного приложения.
 
@@ -66,4 +68,4 @@ publishes: [fixed local XPC status]
 
 ## 5. Limits
 
-Имена служб служат только для проб. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора. Действующий Apple Development сертификат найден вне песочницы; он подходит для локальной пробы, а Developer ID и нотарификация не проверены. Тестовые пакеты создаются во временном каталоге и удаляются после подтверждённого `unregister`; доступа к SMC в daemon нет. `helper-status serve` по-прежнему отказывает при root. Отдельный `daemon-status` нельзя расширять командой записи до проверки [границы helper](../research/research-helper-boundary.md).
+Имена служб служат только для проб. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора. Действующий Apple Development сертификат найден вне песочницы; он подходит для локальной пробы, а Developer ID и нотарификация не проверены. Тестовые пакеты создаются во временном каталоге и удаляются после подтверждённого `unregister`; daemon умеет только читать фиксированные ключи SMC. `helper-status serve` по-прежнему отказывает при root. Отдельный `daemon-status` нельзя расширять командой записи до проверки [границы helper](../research/research-helper-boundary.md).

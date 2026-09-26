@@ -3,3 +3,5 @@
 /daemon-status
 /daemon-registration
 /libhelper-probe.dylib
+/SmcBaselineReadTest
+/HelperBaselineValidationTest

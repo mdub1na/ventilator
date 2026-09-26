@@ -1,4 +1,5 @@
 #import "HelperStatus.h"
+#import "HelperBaselineValidation.h"
 #import <Security/Security.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <jni.h>
@@ -84,61 +85,93 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_setRe
     }
 }
 
+static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, BOOL baseline) {
+    NSString *team = ownTeamID();
+    if (!team) {
+        throwFailure(environment, @"Ventilator.app must have a trusted development signature");
+        return nil;
+    }
+    NSString *requirement = [NSString stringWithFormat:
+        @"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",
+        DaemonIdentifier, team];
+    NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:ServiceName
+        options:NSXPCConnectionPrivileged];
+    connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
+    [connection setCodeSigningRequirement:requirement];
+    [connection resume];
+
+    dispatch_semaphore_t done = dispatch_semaphore_create(0);
+    __block NSDictionary<NSString *, id> *result = nil;
+    __block NSError *requestError = nil;
+    id<HelperStatusXPC> remote = [connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
+        requestError = error;
+        dispatch_semaphore_signal(done);
+    }];
+    void (^complete)(NSDictionary<NSString *, id> *) = ^(NSDictionary<NSString *, id> *response) {
+        result = response;
+        dispatch_semaphore_signal(done);
+    };
+    if (baseline) [remote fetchBaselineWithReply:complete];
+    else [remote fetchStatusWithReply:complete];
+    long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    [connection invalidate];
+    if (timeout != 0) {
+        throwFailure(environment, @"XPC request timed out");
+        return nil;
+    }
+    if (requestError) {
+        throwFailure(environment, requestError.localizedDescription);
+        return nil;
+    }
+    return result;
+}
+
+static jstring encodeResult(JNIEnv *environment, NSDictionary<NSString *, id> *result) {
+    NSError *encodingError = nil;
+    NSData *json = [NSJSONSerialization dataWithJSONObject:result
+        options:NSJSONWritingSortedKeys error:&encodingError];
+    if (!json) {
+        throwFailure(environment, encodingError.localizedDescription ?: @"JSON encoding failed");
+        return NULL;
+    }
+    NSString *value = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
+    return (*environment)->NewStringUTF(environment, value.UTF8String);
+}
+
 JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_requestStatusNative(
     JNIEnv *environment, jobject self
 ) {
     (void)self;
     @autoreleasepool {
-        NSString *team = ownTeamID();
-        if (!team) {
-            throwFailure(environment, @"Ventilator.app must have a trusted development signature");
-            return NULL;
-        }
-        NSString *requirement = [NSString stringWithFormat:
-            @"anchor apple generic and identifier \"%@\" and certificate leaf[subject.OU] = \"%@\"",
-            DaemonIdentifier, team];
-        NSXPCConnection *connection = [[NSXPCConnection alloc] initWithMachServiceName:ServiceName
-            options:NSXPCConnectionPrivileged];
-        connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
-        [connection setCodeSigningRequirement:requirement];
-        [connection resume];
-
-        dispatch_semaphore_t done = dispatch_semaphore_create(0);
-        __block NSDictionary<NSString *, id> *result = nil;
-        __block NSError *requestError = nil;
-        id<HelperStatusXPC> remote = [connection remoteObjectProxyWithErrorHandler:^(NSError *error) {
-            requestError = error;
-            dispatch_semaphore_signal(done);
-        }];
-        [remote fetchStatusWithReply:^(NSDictionary<NSString *, id> *status) {
-            result = status;
-            dispatch_semaphore_signal(done);
-        }];
-        long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
-        [connection invalidate];
-        if (timeout != 0) {
-            throwFailure(environment, @"XPC request timed out");
-            return NULL;
-        }
-        if (requestError) {
-            throwFailure(environment, requestError.localizedDescription);
-            return NULL;
-        }
+        NSDictionary<NSString *, id> *result = fetchDaemon(environment, NO);
+        if (!result) return NULL;
         if (![result[@"protocol_version"] isEqual:@(HelperStatusProtocolVersion)] ||
             ![result[@"state"] isEqual:@"read_only_prototype"] ||
-            ![result[@"smc_access"] isEqual:@NO] ||
+            ![result[@"smc_access"] isEqual:@YES] ||
             ![result[@"write_available"] isEqual:@NO] || result.count != 4) {
             throwFailure(environment, @"XPC status contract mismatch");
             return NULL;
         }
-        NSError *encodingError = nil;
-        NSData *json = [NSJSONSerialization dataWithJSONObject:result
-            options:NSJSONWritingSortedKeys error:&encodingError];
-        if (!json) {
-            throwFailure(environment, encodingError.localizedDescription ?: @"JSON encoding failed");
+        return encodeResult(environment, result);
+    }
+}
+
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_requestBaselineNative(
+    JNIEnv *environment, jobject self
+) {
+    (void)self;
+    @autoreleasepool {
+        NSDictionary<NSString *, id> *result = fetchDaemon(environment, YES);
+        if (!result) return NULL;
+        if ([result[@"available"] isEqual:@NO] &&
+            [result[@"reason"] isKindOfClass:NSString.class]) {
+            throwFailure(environment, [@"SMC baseline unavailable: " stringByAppendingString:result[@"reason"]]);
             return NULL;
         }
-        NSString *value = [[NSString alloc] initWithData:json encoding:NSUTF8StringEncoding];
-        return (*environment)->NewStringUTF(environment, value.UTF8String);
+        if (!HelperBaselineResponseValid(result)) {
+            throwFailure(environment, @"XPC baseline unavailable or contract mismatch");
+            return NULL;
+        }
+        return encodeResult(environment, result);
     }
 }

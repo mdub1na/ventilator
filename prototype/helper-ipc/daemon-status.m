@@ -1,5 +1,7 @@
 #import "HelperStatus.h"
+#include "SmcBaselineRead.h"
 #include <ctype.h>
+#include <time.h>
 
 @interface DaemonStatus : NSObject <HelperStatusXPC>
 @end
@@ -9,9 +11,40 @@
     reply(@{
         @"protocol_version": @(HelperStatusProtocolVersion),
         @"state": @"read_only_prototype",
-        @"smc_access": @NO,
+        @"smc_access": @YES,
         @"write_available": @NO
     });
+}
+
+- (void)fetchBaselineWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    SmcBaselineSnapshot snapshot = {0};
+    SmcBaselineResult result = smc_baseline_read(&snapshot);
+    if (result != SMC_BASELINE_OK) {
+        reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
+                @"available": @NO,
+                @"reason": [NSString stringWithUTF8String:smc_baseline_result_name(result)]});
+        return;
+    }
+    struct timespec sampled = {0};
+    if (clock_gettime(CLOCK_MONOTONIC, &sampled) != 0) {
+        reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
+                @"available": @NO, @"reason": @"clock_failed"});
+        return;
+    }
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
+            @"available": @YES,
+            @"model": @"Mac15,7",
+            @"macos": @"27.0",
+            @"sample_monotonic_ns": @((uint64_t)sampled.tv_sec * 1000000000u +
+                                       (uint64_t)sampled.tv_nsec),
+            @"baseline": @(smc_baseline_is_system(&snapshot)),
+            @"Ftst": @(snapshot.ftst),
+            @"mode": @[@(snapshot.mode[0]), @(snapshot.mode[1])],
+            @"target_rpm": @[@(snapshot.target_rpm[0]), @(snapshot.target_rpm[1])],
+            @"actual_rpm": @[@(snapshot.actual_rpm[0]), @(snapshot.actual_rpm[1])],
+            @"temperatures_c": @[@(snapshot.temperatures_c[0]),
+                                  @(snapshot.temperatures_c[1]),
+                                  @(snapshot.temperatures_c[2])]});
 }
 @end
 

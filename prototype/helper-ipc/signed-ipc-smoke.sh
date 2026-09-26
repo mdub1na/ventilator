@@ -51,6 +51,12 @@ plutil -lint "$plist"
 registered=1
 launchctl bootstrap "$domain" "$plist"
 "$scratch/signed-client" request-signed "$service" "$team"
+baseline=$("$scratch/signed-client" request-baseline-signed "$service" "$team")
+case "$baseline" in
+    *'"available":true'*'"baseline":true'* ) ;;
+    *) echo "signed daemon did not confirm read-only system baseline: $baseline" >&2; exit 1 ;;
+esac
+echo "signed-baseline=$baseline"
 if "$scratch/other-client" request-signed "$service" "$team" >/dev/null 2>&1; then
     echo "CRITICAL: ad hoc client reached signed listener" >&2
     exit 1
