@@ -28,11 +28,15 @@ publishes: [fixed local XPC status]
 | `prototype/helper-ipc/helper-status.m` | реализация listener и клиента |
 | `prototype/helper-ipc/smoke.sh` | временный plist, регистрация и удаление |
 | `prototype/helper-ipc/Makefile` | сборка и запуск пробы |
+| `prototype/helper-ipc/agent-registration.m` | вызовы `SMAppService.agent` из тестового `.app` |
+| `prototype/helper-ipc/package-smoke.sh` | сборка временного пакета, регистрация, XPC и удаление |
 
 ## 4. Local setup
 
 На macOS с Xcode Command Line Tools выполнить `make -C prototype/helper-ipc smoke`. Скрипт создаёт две ad hoc подписанные копии с разными идентификаторами и `cdhash`, регистрирует временные службы в пользовательском домене `gui/<uid>`, проверяет успешный статус и оба отказа по несовпадению подписи. `launchctl bootstrap` в песочнице Codex может быть запрещён. После запросов скрипт вызывает `bootout` и проверяет отсутствие обеих служб. При отказе удаления он сохраняет временный plist и печатает имя службы. На `Mac15,7`/macOS 27.0 эта проба прошла; клиент получил `4102` для другой копии сервиса, другая копия клиента — `4097`, delegate доверенного сервиса не принял её, а доверенное соединение после этого продолжило работать.
 
+`make -C prototype/helper-ipc package-smoke` строит отдельный ad hoc подписанный `HelperProbe.app`. В нём helper находится в `Contents/Resources`, а plist с относительным `BundleProgram` — в `Contents/Library/LaunchAgents`, как описывает [Apple для SMAppService](https://developer.apple.com/documentation/servicemanagement/updating-helper-executables-from-earlier-versions-of-macos). Тестовый app вызывает `SMAppService.agent(plistName:)`, регистрирует и отменяет регистрацию, затем скрипт подтверждает `notRegistered` и отсутствие службы. На `Mac15,7`/macOS 27.0 наблюдались `notFound → enabled → notRegistered`, успешный XPC ответ и удаление пакета. Это не упаковка `Ventilator.app` и не системный LaunchDaemon.
+
 ## 5. Limits
 
-Имена временных служб служат только для smoke-пробы. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора или устойчивую идентичность для обновления. Локально не найдено ни одной действующей code-signing identity. Нет постоянной регистрации `SMAppService`, интеграции с UI либо доступа к SMC. Код отказывает в запуске `serve` с правами root; его нельзя устанавливать как root daemon или расширять командой записи до прохождения отдельных проверок [границы helper](../research/research-helper-boundary.md).
+Имена временных служб служат только для проб. `cdhash` подтверждает конкретный код в текущем запуске, но копия того же бинарника имеет тот же хеш; ad hoc подпись не задаёт доверенного автора или устойчивую идентичность для обновления. Локально не найдено ни одной действующей code-signing identity. Пакет создаётся во временном каталоге и удаляется после теста; нет интеграции с UI либо доступа к SMC. Код отказывает в запуске `serve` с правами root; его нельзя устанавливать как root daemon или расширять командой записи до прохождения отдельных проверок [границы helper](../research/research-helper-boundary.md).
