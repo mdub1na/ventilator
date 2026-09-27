@@ -198,6 +198,30 @@ bool trial_restore_unlock(TrialBackend *backend) {
         backend->record_observation(backend->context, 0, &current);
     }
 
+    // On Mac15,7 the accepted Ftst write left both modes at 0 with minimum
+    // targets. Try a single zero for each nonzero target before releasing Ftst.
+    // Re-read before each write: never touch a target once either fan is
+    // system-owned, even if the initial observation showed two mode-0 fans.
+    if (current.mode[0] == 0 && current.mode[1] == 0 &&
+        (current.target_rpm[0] > 1.0 || current.target_rpm[1] > 1.0)) {
+        for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+            if (!backend->read_observation(backend->context, false, &current) ||
+                current.ftst != 1 || current.mode[0] != 0 || current.mode[1] != 0 ||
+                !modes_released(&current)) break;
+            if (current.target_rpm[fan] > 1.0) {
+                (void)backend->write_target(backend->context, fan, 0.0);
+            }
+        }
+        if (!backend->read_observation(backend->context, false, &current) ||
+            !modes_released(&current)) return false;
+        if (backend->record_observation != NULL) {
+            backend->record_observation(backend->context, 0, &current);
+        }
+        // If Ftst changed during this narrow step, let the caller perform
+        // independent observation or emergency recovery from a fresh state.
+        if (current.ftst != 1) return false;
+    }
+
     bool ftst_cleared = false;
     for (unsigned attempt = 0; attempt < FTST_RELEASE_RETRIES && !ftst_cleared; ++attempt) {
         (void)backend->write_ftst(backend->context, 0);
