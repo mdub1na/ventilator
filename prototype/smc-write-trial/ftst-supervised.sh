@@ -13,6 +13,13 @@ if [[ $# -ne 0 || ! -t 0 || "$(id -u)" -ne 0 || ! -x "$trial_binary" ]]; then
     exit 2
 fi
 
+for source in Makefile smc-write-trial.c trial_logic.c trial_logic.h trial_actions.c trial_actions.h; do
+    if [[ ! -f "$trial_dir/$source" || "$trial_dir/$source" -nt "$trial_binary" ]]; then
+        echo "Trial binary is stale or source is missing: $source. Rebuild with make -C $trial_dir build; no SMC access attempted." >&2
+        exit 2
+    fi
+done
+
 recover_and_verify() {
     local recovery_status observer_status
     echo "CRITICAL: checking independent recovery; keep the Mac awake." >&2

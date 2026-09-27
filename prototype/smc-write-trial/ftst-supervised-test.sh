@@ -5,6 +5,10 @@ set -u
 case_dir="$(mktemp -d "${TMPDIR:-/tmp}/ftst-supervised-test.XXXXXX")"
 trap 'rm -rf "$case_dir"' EXIT
 cp "$(dirname "$0")/ftst-supervised.sh" "$case_dir/ftst-supervised.sh"
+for source in Makefile smc-write-trial.c trial_logic.c trial_logic.h trial_actions.c trial_actions.h; do
+    cp "$(dirname "$0")/$source" "$case_dir/$source"
+    touch -t 202001010000 "$case_dir/$source"
+done
 
 cat > "$case_dir/id" <<'FAKE_ID'
 #!/bin/sh
@@ -30,12 +34,12 @@ esac
 exit 9
 FAKE_SMC
 chmod +x "$case_dir/id" "$case_dir/smc-write-trial"
+touch -t 202101010000 "$case_dir/smc-write-trial"
 
 run_case() {
-    local result
     : > "$case_dir/log"
     rm -f "$case_dir/seen"
-    if result=$(script -q -e /dev/null env \
+    if case_output=$(script -q -e /dev/null env \
         PATH="$case_dir:$PATH" \
         FTST_FAKE_LOG="$case_dir/log" \
         FTST_FAKE_SEEN="$case_dir/seen" \
@@ -62,5 +66,11 @@ if run_case 0 1; then exit 1; else status=$?; fi
 [[ $status -eq 1 ]] || exit 1
 [[ $(grep -c 'observe-baseline --read-only' "$case_dir/log") -eq 2 ]] || exit 1
 grep -q 'restore-unlock --apply' "$case_dir/log" || exit 1
+
+touch -t 202201010000 "$case_dir/trial_actions.c"
+if run_case 0 0; then exit 1; else status=$?; fi
+[[ $status -eq 2 ]] || exit 1
+[[ ! -s "$case_dir/log" ]] || exit 1
+[[ "$case_output" == *'Trial binary is stale or source is missing: trial_actions.c'* ]] || exit 1
 
 echo 'supervised Ftst wrapper tests passed'
