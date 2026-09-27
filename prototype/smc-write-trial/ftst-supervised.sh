@@ -53,6 +53,10 @@ fi
 trial_started=1
 "$trial_binary" ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0
 trial_status=$?
+if [[ $trial_status -eq 2 ]]; then
+    echo "Trial stopped before any SMC write; independent observation is unnecessary."
+    exit 2
+fi
 
 echo "Starting an independent read-only process after the trial exited."
 "$trial_binary" observe-baseline --read-only

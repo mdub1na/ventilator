@@ -32,6 +32,8 @@ enum {
     SMC_READ_KEY_INFO = 9,
 };
 
+enum { TRIAL_EXIT_NO_WRITE = 2 };
+
 static const char *const TEMPERATURE_KEYS[TRIAL_TEMPERATURE_COUNT] = {"TCMz", "Tg0D", "TH0a"};
 
 typedef struct {
@@ -1002,7 +1004,9 @@ static void print_ftst_readback(
 static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     char model[32] = {0};
     char os_version[32] = {0};
-    if (!exact_environment(model, os_version)) return EXIT_FAILURE;
+    if (!exact_environment(model, os_version)) {
+        return apply ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
+    }
 
     TrialPreflight preflight = {0};
     TrialPlan plan = {0};
@@ -1010,7 +1014,7 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
         !snapshot_has_zero_targets(&baseline)) {
         fputs("ftst-check blocked: preflight or zero-target baseline failed\n", stderr);
-        return EXIT_FAILURE;
+        return apply ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
     }
     print_plan(apply ? "ftst-check-apply" : "ftst-check-dry-run",
                model, os_version, &baseline, NULL);
@@ -1020,22 +1024,22 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     }
     if (geteuid() != 0) {
         fputs("ftst-check --apply requires root\n", stderr);
-        return EXIT_FAILURE;
+        return TRIAL_EXIT_NO_WRITE;
     }
     if (!prompt_for_ftst_check(program)) {
         fputs("confirmation did not match; no SMC writes were attempted\n", stderr);
-        return EXIT_FAILURE;
+        return TRIAL_EXIT_NO_WRITE;
     }
     if (!install_signal_handlers()) {
         fputs("cannot install signal handlers; no SMC writes were attempted\n", stderr);
-        return EXIT_FAILURE;
+        return TRIAL_EXIT_NO_WRITE;
     }
 
     puts("confirmation accepted; repeating preflight before any SMC write");
     if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
         !snapshot_has_zero_targets(&baseline)) {
         fputs("post-confirmation preflight failed; no SMC writes were attempted\n", stderr);
-        return EXIT_FAILURE;
+        return TRIAL_EXIT_NO_WRITE;
     }
     print_plan("ftst-check-final", model, os_version, &baseline, NULL);
 
@@ -1067,7 +1071,7 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     if (status == TRIAL_RUN_BASELINE_REJECTED) {
         fputs("ftst-check blocked: baseline not verified before write; no SMC writes were attempted\n",
               stderr);
-        return EXIT_FAILURE;
+        return TRIAL_EXIT_NO_WRITE;
     }
     if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
         fputs("ftst-check failed or was interrupted; system baseline verified\n", stderr);
@@ -1172,7 +1176,7 @@ int main(int argc, char **argv) {
     }
 
     Smc smc = {0};
-    if (!smc_open(&smc)) return EXIT_FAILURE;
+    if (!smc_open(&smc)) return apply_reviewed ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
     char absolute_program[PATH_MAX] = {0};
     const char *program = realpath(argv[0], absolute_program) != NULL ? absolute_program : argv[0];
     int result = observe_baseline ? run_observe_baseline(&smc) :

@@ -17,6 +17,7 @@ trial-actions-test: trial_actions_test.c trial_actions.c trial_actions.h trial_l
 test: smc-write-trial trial-logic-test trial-actions-test
 	./trial-logic-test
 	./trial-actions-test
+	bash ./ftst-supervised-test.sh
 	@for command in 'trial TRIAL-Mac15,7-27.0' 'ftst-check FTST-CHECK-Mac15,7-27.0'; do \
 		set -- $$command; \
 		output=$$(./smc-write-trial "$$1" --apply --confirm "$$2" 2>&1); status=$$?; \
