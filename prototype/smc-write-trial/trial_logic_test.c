@@ -94,6 +94,19 @@ static void preflight_rejects_every_allowlist_mismatch(void) {
     assert(trial_make_plan(&input, &plan, error, sizeof(error)));
 }
 
+static void transient_middle_cpu_peak_blocks_preflight(void) {
+    TrialPreflight input = valid_preflight();
+    TrialPlan plan = {0};
+    char error[160] = {0};
+    input.temperatures_c[0][0] = 62.97;
+    input.temperatures_c[1][0] = 58.09;
+    input.temperatures_c[2][0] = 77.91;
+    input.temperatures_c[3][0] = 59.05;
+    input.temperatures_c[4][0] = 56.80;
+    assert(!trial_make_plan(&input, &plan, error, sizeof(error)));
+    assert(strcmp(error, "a required temperature is unavailable or too high") == 0);
+}
+
 static void rpm_encoding_follows_runtime_key_type(void) {
     uint8_t bytes[4] = {0};
     size_t size = 0;
@@ -133,6 +146,7 @@ static void transport_allows_only_planned_targets_or_zero(void) {
 int main(void) {
     valid_preflight_builds_targets_above_current_cooling();
     preflight_rejects_every_allowlist_mismatch();
+    transient_middle_cpu_peak_blocks_preflight();
     rpm_encoding_follows_runtime_key_type();
     observed_rpm_requires_growth_and_target_tolerance();
     transport_allows_only_planned_targets_or_zero();
