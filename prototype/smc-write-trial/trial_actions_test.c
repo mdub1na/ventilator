@@ -431,6 +431,43 @@ static void independent_restore_clears_ftst_after_unchanged_modes(void) {
     assert(mock.ftst == 0);
 }
 
+static void independent_restore_does_not_trust_one_baseline_read(void) {
+    MockBackend mock = {.modes = {3, 3}};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(mock.write_count == 0);
+    assert(mock.now >= 60.0);
+}
+
+static void independent_restore_recovers_delayed_ftst_effect(void) {
+    MockBackend mock = {.modes = {3, 3}, .pending_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 12.0,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now >= 72.0);
+}
+
+static void independent_restore_reports_failed_delayed_release(void) {
+    MockBackend mock = {.modes = {3, 3}, .pending_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 12.0,
+                        .fail_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
+    assert(mock.ftst == 1);
+    assert(mock.now >= 12.0);
+}
+
+static void independent_restore_observes_after_zero_ftst_cleanup(void) {
+    MockBackend mock = {.modes = {3, 3}, .targets = {1350, 1458}};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "M0=0;T0=0;M1=0;T1=0;") == 0);
+    assert(mock.now >= 60.0);
+}
+
 static void interruption_after_unlock_still_restores_ftst(void) {
     MockBackend mock = {.modes = {3, 3}, .stop_after_unlock = true};
     TrialBackend backend = backend_for(&mock);
@@ -655,6 +692,10 @@ int main(void) {
     failed_release_does_not_skip_delayed_effect_observation();
     ftst_error_with_changed_readback_still_clears_unlock();
     independent_restore_clears_ftst_after_unchanged_modes();
+    independent_restore_does_not_trust_one_baseline_read();
+    independent_restore_recovers_delayed_ftst_effect();
+    independent_restore_reports_failed_delayed_release();
+    independent_restore_observes_after_zero_ftst_cleanup();
     interruption_after_unlock_still_restores_ftst();
     ftst_release_failure_requires_independent_recovery();
     ftst_is_not_cleared_while_a_fan_remains_manual();

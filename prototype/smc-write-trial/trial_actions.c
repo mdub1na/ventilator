@@ -144,10 +144,13 @@ bool trial_restore_system(TrialBackend *backend) {
     return false;
 }
 
+static TrialBaselineResult trial_observe_after_ftst(TrialBackend *backend);
+
 bool trial_restore_unlock(TrialBackend *backend) {
     if (backend == NULL || backend->write_ftst == NULL ||
         backend->write_mode == NULL || backend->write_target == NULL ||
-        backend->read_observation == NULL || backend->wait_milliseconds == NULL) return false;
+        backend->read_observation == NULL || backend->wait_milliseconds == NULL ||
+        backend->should_stop == NULL) return false;
 
     TrialObservation current = {0};
     bool read_ok = false;
@@ -164,8 +167,21 @@ bool trial_restore_unlock(TrialBackend *backend) {
     if (backend->record_observation != NULL) {
         backend->record_observation(backend->context, 0, &current);
     }
-    if (trial_observation_is_baseline(&current)) return true;
-    if (current.ftst == 0) return trial_restore_system(backend);
+    bool delayed_change = false;
+    if (trial_observation_is_baseline(&current)) {
+        // Ftst can change after an apparently restored first read. Observe
+        // before declaring success; recover if the delayed effect appears.
+        TrialBaselineResult result = trial_observe_after_ftst(backend);
+        if (result.status == TRIAL_BASELINE_STABLE) return true;
+        if (result.status != TRIAL_BASELINE_CHANGED ||
+            !backend->read_observation(backend->context, false, &current)) return false;
+        delayed_change = true;
+    }
+    if (current.ftst == 0) {
+        return trial_restore_system(backend) &&
+               trial_observe_after_ftst(backend).status == TRIAL_BASELINE_STABLE &&
+               !delayed_change;
+    }
     if (current.ftst != 1) return false;
 
     // Mode 0 is treated as released by this trial protocol. The observed
@@ -213,7 +229,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
         }
         stable_seconds = trial_observation_is_baseline(&observation) ?
                          stable_seconds + 1 : 0;
-        if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return true;
+        if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return !delayed_change;
         if (second < FTST_BASELINE_WAIT_SECONDS &&
             !backend->wait_milliseconds(backend->context, 1000)) return false;
     }
@@ -303,7 +319,10 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
                          temperatures_safe(&after_write) &&
                          backend->monotonic_seconds(backend->context) - started < 5.0 &&
                          !backend->should_stop(backend->context);
-        if (!trial_restore_unlock(backend)) return TRIAL_RUN_RESTORE_FAILED;
+        if (!trial_restore_unlock(backend)) {
+            return trial_observe_after_ftst(backend).status == TRIAL_BASELINE_STABLE ?
+                   TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED : TRIAL_RUN_RESTORE_FAILED;
+        }
         // A baseline read at the start of recovery can precede a delayed
         // effect. Observe after recovery regardless of the first readback.
         if (trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
