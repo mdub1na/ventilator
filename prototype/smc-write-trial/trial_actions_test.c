@@ -509,9 +509,31 @@ static void ftst_release_without_system_takeover_is_not_verified(void) {
                         .targets = {1350, 1458}, .reject_zero_targets = true};
     TrialBackend backend = backend_for(&mock);
     assert(!trial_restore_unlock(&backend));
-    assert(strcmp(mock.writes, "Ftst=0;") == 0);
-    assert(mock.ftst == 0 && mock.modes[0] == 0 && mock.modes[1] == 0);
+    assert(strncmp(mock.writes, "Ftst=0;M0=0;", strlen("Ftst=0;M0=0;")) == 0);
+    assert(mock.write_count == 23);  // One fallback, including target retries.
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.targets[0] == 1350 && mock.targets[1] == 1458);
     assert(mock.now >= 90.0);
+}
+
+static void ftst_release_retries_zero_targets_only_after_unlock_clears(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .targets = {1350, 1458}};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;M0=0;T0=0;M1=0;T1=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.targets[0] == 0 && mock.targets[1] == 0);
+    assert(mock.now >= 70.0);
+}
+
+static void ftst_release_does_not_overwrite_a_system_owned_fan_target(void) {
+    MockBackend mock = {.modes = {0, 3}, .ftst = 1,
+                        .targets = {1350, 1458}};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.targets[1] == 1458);
 }
 
 static void delayed_ftst_release_waits_for_readback_and_stable_window(void) {
@@ -701,6 +723,8 @@ int main(void) {
     ftst_is_not_cleared_while_a_fan_remains_manual();
     ftst_restore_allows_firmware_minimum_targets_before_release();
     ftst_release_without_system_takeover_is_not_verified();
+    ftst_release_retries_zero_targets_only_after_unlock_clears();
+    ftst_release_does_not_overwrite_a_system_owned_fan_target();
     delayed_ftst_release_waits_for_readback_and_stable_window();
     ftst_release_relatched_during_observation_is_not_verified();
     ftst_unexpected_manual_mode_releases_fans_first();

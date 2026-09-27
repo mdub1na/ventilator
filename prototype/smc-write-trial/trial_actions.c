@@ -10,6 +10,7 @@ enum {
     OBSERVE_SECONDS = 5,
     FTST_RELEASE_RETRIES = 3,
     FTST_RELEASE_WAIT_SECONDS = 10,
+    FTST_POST_CLEAR_FALLBACK_SECONDS = 10,
     FTST_BASELINE_WAIT_SECONDS = 90,
     FTST_BASELINE_STABLE_SECONDS = 60,
     FTST_EFFECT_WAIT_HALF_SECONDS = 20,
@@ -230,6 +231,14 @@ bool trial_restore_unlock(TrialBackend *backend) {
         stable_seconds = trial_observation_is_baseline(&observation) ?
                          stable_seconds + 1 : 0;
         if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return !delayed_change;
+        // Only a fully released pair may receive this one-shot fallback. A
+        // fan already in system mode might have a legitimate nonzero target.
+        if (second == FTST_POST_CLEAR_FALLBACK_SECONDS &&
+            observation.mode[0] == 0 && observation.mode[1] == 0) {
+            (void)trial_restore_system(backend);
+            // Even a successful local read is not proof of a lasting return.
+            // Continue the outer minute-long observation either way.
+        }
         if (second < FTST_BASELINE_WAIT_SECONDS &&
             !backend->wait_milliseconds(backend->context, 1000)) return false;
     }
