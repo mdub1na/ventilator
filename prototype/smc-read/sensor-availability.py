@@ -14,6 +14,7 @@ from pathlib import Path
 KEYS = ("TCMz", "Tg0D", "Tg05", "Tg1B", "TH0a")
 SAMPLES = 120
 PAIRED_SAMPLES = 60
+RAW_GAP_SAMPLES = 60
 INTERVAL_SECONDS = 1
 
 
@@ -89,6 +90,74 @@ def sample_event(reading: dict[str, float | None], index: int, elapsed: float) -
             if key.startswith("Tg") and key not in KEYS and value is not None
         )
     return sample
+
+
+def read_gpu_raw(probe: Path) -> list[dict]:
+    result = subprocess.run(
+        [str(probe), "--gpu-raw-json"],
+        capture_output=True, text=True, timeout=10, check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"read-only raw SMC probe exited {result.returncode}")
+    data = json.loads(result.stdout)
+    if not isinstance(data, dict):
+        raise RuntimeError("raw temperature response has an unexpected schema")
+    readings = data.get("readings")
+    if (data.get("schema") != 1 or not isinstance(readings, list) or
+            not all(isinstance(item, dict) for item in readings) or
+            {item.get("key") for item in readings} != set(KEYS) or
+            len(readings) != len(KEYS)):
+        raise RuntimeError("raw temperature response has an unexpected schema")
+    return readings
+
+
+def raw_gap_audit(probe: Path, model: str, macos: str) -> int:
+    sudo_uid = os.environ.get("SUDO_UID", "")
+    if os.geteuid() != 0 or not sudo_uid.isdigit() or int(sudo_uid) <= 0:
+        print("Raw gap audit requires sudo from a regular user", file=sys.stderr)
+        return 2
+    print(json.dumps({"event": "raw-gap-start", "model": model, "macOS": macos,
+                      "planned_samples": RAW_GAP_SAMPLES}), flush=True)
+    started = time.monotonic()
+    completed = 0
+    gaps = 0
+    try:
+        for index in range(RAW_GAP_SAMPLES):
+            delay = started + index * INTERVAL_SECONDS - time.monotonic()
+            if delay > 0:
+                time.sleep(delay)
+            enumeration_started = time.monotonic()
+            reading = read_temperatures(probe)
+            completed += 1
+            if reading.get("Tg0D") is None:
+                gaps += 1
+                raw_started = time.monotonic()
+                raw = read_gpu_raw(probe)
+                print(json.dumps({
+                    "event": "raw-gap", "index": index,
+                    "elapsed_seconds": round(time.monotonic() - started, 2),
+                    "filtered_temperatures_c": {key: reading.get(key) for key in KEYS},
+                    "read_start_gap_ms": round((raw_started - enumeration_started) * 1000),
+                    "raw_readings": raw,
+                }), flush=True)
+            elif index == 0 or index == RAW_GAP_SAMPLES - 1:
+                print(json.dumps(sample_event(
+                    reading, index, time.monotonic() - started
+                )), flush=True)
+    except (OSError, RuntimeError, ValueError, KeyError, TypeError,
+            subprocess.TimeoutExpired) as error:
+        print(json.dumps({"event": "raw-gap-read-failed", "index": completed,
+                          "reason": str(error)}), file=sys.stderr, flush=True)
+        print(json.dumps({"event": "raw-gap-summary", "samples": completed,
+                          "gaps": gaps}), flush=True)
+        return 1
+    except KeyboardInterrupt:
+        print(json.dumps({"event": "raw-gap-summary", "samples": completed,
+                          "gaps": gaps}), flush=True)
+        return 130
+    print(json.dumps({"event": "raw-gap-summary", "samples": completed,
+                      "gaps": gaps}), flush=True)
+    return 0
 
 
 def pair_classification(root: dict, user: dict) -> str:
@@ -178,8 +247,9 @@ def paired_audit(probe: Path, model: str, macos: str) -> int:
 
 def main() -> int:
     paired = len(sys.argv) == 2 and sys.argv[1] == "--paired"
-    if len(sys.argv) != 1 and not paired:
-        print("Usage: sensor-availability.py [--paired]", file=sys.stderr)
+    raw_on_gap = len(sys.argv) == 2 and sys.argv[1] == "--raw-on-gap"
+    if len(sys.argv) != 1 and not paired and not raw_on_gap:
+        print("Usage: sensor-availability.py [--paired|--raw-on-gap]", file=sys.stderr)
         return 2
     probe = Path(__file__).with_name("smc-read").resolve()
     if not probe.is_file():
@@ -201,6 +271,8 @@ def main() -> int:
         return 2
     if paired:
         return paired_audit(probe, model, macos)
+    if raw_on_gap:
+        return raw_gap_audit(probe, model, macos)
     print(json.dumps({"event": "start", "model": model, "macOS": macos,
                       "root": os.geteuid() == 0, "planned_samples": SAMPLES}), flush=True)
     readings = []

@@ -2,9 +2,11 @@
 """Contract checks for the read-only GPU sensor availability report."""
 
 import importlib.util
+import io
 import json
 import subprocess
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
@@ -101,6 +103,44 @@ class SensorAvailabilityTest(unittest.TestCase):
             "user_only_unavailable": 0,
             "both_unavailable": 1,
         })
+
+    def test_raw_reader_accepts_only_fixed_temperature_keys(self):
+        readings = [{"key": key, "read_ok": True, "raw_celsius": 42.0}
+                    for key in AUDIT.KEYS]
+        response = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"schema": 1, "readings": readings}), stderr=""
+        )
+        with patch.object(AUDIT.subprocess, "run", return_value=response) as run:
+            self.assertEqual(AUDIT.read_gpu_raw(Path("/unused/read-only-probe")), readings)
+        self.assertEqual(run.call_args.args[0][-1], "--gpu-raw-json")
+
+        missing = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"schema": 1, "readings": readings[:-1]}), stderr=""
+        )
+        with patch.object(AUDIT.subprocess, "run", return_value=missing):
+            with self.assertRaisesRegex(RuntimeError, "unexpected schema"):
+                AUDIT.read_gpu_raw(Path("/unused/read-only-probe"))
+
+    def test_raw_probe_runs_only_after_filtered_gpu_gap(self):
+        output = io.StringIO()
+        normal = {"TCMz": 50.0, "Tg0D": 43.0, "Tg05": 43.1,
+                  "Tg1B": 43.2, "TH0a": 31.0}
+        gap = {**normal, "Tg0D": None, "Tg05": None, "Tg1B": None}
+        with patch.object(AUDIT.os, "geteuid", return_value=0), \
+                patch.dict(AUDIT.os.environ, {"SUDO_UID": "501"}), \
+                patch.object(AUDIT, "RAW_GAP_SAMPLES", 2), \
+                patch.object(AUDIT, "INTERVAL_SECONDS", 0), \
+                patch.object(AUDIT, "read_temperatures", side_effect=[gap, normal]), \
+                patch.object(AUDIT, "read_gpu_raw", return_value=[
+                    {"key": "Tg0D", "read_ok": True, "raw_celsius": -1.95}
+                ]) as raw, redirect_stdout(output):
+            self.assertEqual(AUDIT.raw_gap_audit(Path("/unused"), "Mac15,7", "27.0"), 0)
+        raw.assert_called_once()
+        events = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(events[1]["event"], "raw-gap")
+        self.assertEqual(events[-1], {"event": "raw-gap-summary", "samples": 2, "gaps": 1})
 
 
 if __name__ == "__main__":

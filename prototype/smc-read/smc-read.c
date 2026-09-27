@@ -69,6 +69,7 @@ typedef struct {
     io_connect_t connection;
     kern_return_t kernel_status;
     uint8_t smc_status;
+    uint8_t last_command;
 } Smc;
 
 static uint32_t fourcc(const char *text) {
@@ -109,6 +110,7 @@ static bool call_read(Smc *smc, SmcKeyData *request, SmcKeyData *response) {
     smc->kernel_status = IOConnectCallStructMethod(
         smc->connection, SMC_SELECTOR, request, sizeof(*request), response, &output_size);
     smc->smc_status = response->result;
+    smc->last_command = request->command;
     return smc->kernel_status == KERN_SUCCESS &&
            output_size == sizeof(*response) && response->result == 0;
 }
@@ -277,8 +279,10 @@ static bool read_key_at(Smc *smc, uint32_t index, char key[5]) {
 static void print_json_key(const char key[5]) {
     putchar('"');
     for (unsigned i = 0; i < 4; ++i) {
-        if (key[i] == '"' || key[i] == '\\') putchar('\\');
-        putchar(key[i]);
+        unsigned char character = (unsigned char)key[i];
+        if (character == '"' || character == '\\') putchar('\\');
+        if (character < 32 || character > 126) printf("\\u%04x", character);
+        else putchar(character);
     }
     putchar('"');
 }
@@ -318,6 +322,44 @@ static void print_temperatures_json(Smc *smc) {
             fputs("null", stdout);
         }
         putchar('}');
+    }
+    puts("]}");
+}
+
+static void print_raw_temperature(Smc *smc, const char name[4]) {
+    SmcValue value = {0};
+    bool available = read_key(smc, name, &value);
+    printf("{\"key\":\"%.4s\",\"read_ok\":%s,\"last_command\":%u,"
+           "\"kernel\":%u,\"smc\":%u",
+           name, available ? "true" : "false", (unsigned)smc->last_command,
+           (unsigned)smc->kernel_status, (unsigned)smc->smc_status);
+    if (available) {
+        fputs(",\"type\":", stdout);
+        print_json_key(value.type);
+        printf(",\"size\":%u,\"bytes_hex\":\"", value.size);
+        for (unsigned index = 0; index < value.size; ++index) {
+            printf("%02x", value.bytes[index]);
+        }
+        fputs("\",\"raw_celsius\":", stdout);
+        double number = 0;
+        bool decoded = (strcmp(value.type, "flt ") == 0 ||
+                        strcmp(value.type, "sp78") == 0) &&
+                       read_number(&value, &number);
+        if (decoded) printf("%.5f", number);
+        else fputs("null", stdout);
+        fputs(",\"plausible_celsius\":", stdout);
+        if (decoded && number >= 10 && number <= 115) printf("%.2f", number);
+        else fputs("null", stdout);
+    }
+    putchar('}');
+}
+
+static void print_gpu_raw_json(Smc *smc) {
+    const char *keys[] = {"TCMz", "Tg0D", "Tg05", "Tg1B", "TH0a"};
+    fputs("{\"schema\":1,\"readings\":[", stdout);
+    for (unsigned index = 0; index < sizeof(keys) / sizeof(keys[0]); ++index) {
+        if (index) putchar(',');
+        print_raw_temperature(smc, keys[index]);
     }
     puts("]}");
 }
@@ -366,8 +408,10 @@ int main(int argc, char **argv) {
     bool show_all = argc == 2 && strcmp(argv[1], "--all-temperatures") == 0;
     bool status_json = argc == 2 && strcmp(argv[1], "--status-json") == 0;
     bool temperatures_json = argc == 2 && strcmp(argv[1], "--temperatures-json") == 0;
-    if (argc > 2 || (argc == 2 && !show_all && !status_json && !temperatures_json)) {
-        fprintf(stderr, "Usage: %s [--all-temperatures|--status-json|--temperatures-json]\n", argv[0]);
+    bool gpu_raw_json = argc == 2 && strcmp(argv[1], "--gpu-raw-json") == 0;
+    if (argc > 2 || (argc == 2 && !show_all && !status_json &&
+                     !temperatures_json && !gpu_raw_json)) {
+        fprintf(stderr, "Usage: %s [--all-temperatures|--status-json|--temperatures-json|--gpu-raw-json]\n", argv[0]);
         return EXIT_FAILURE;
     }
     io_service_t service = IOServiceGetMatchingService(
@@ -389,6 +433,7 @@ int main(int argc, char **argv) {
     }
     if (status_json) print_status_json(&smc);
     else if (temperatures_json) print_temperatures_json(&smc);
+    else if (gpu_raw_json) print_gpu_raw_json(&smc);
     else {
         print_fans(&smc);
         print_temperatures(&smc, show_all);
