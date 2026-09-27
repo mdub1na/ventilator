@@ -123,7 +123,7 @@ typedef struct {
     bool buffer_events;
     WriteEvent writes[64];
     size_t write_count;
-    ObservationEvent observations[256];
+    ObservationEvent observations[512];
     size_t observation_count;
     bool observation_overflow;
 } LiveBackend;
@@ -1128,10 +1128,12 @@ static void usage(const char *program) {
             "  %s ftst-check --dry-run\n"
             "  %s restore-unlock --dry-run\n"
             "  %s observe-baseline --read-only\n"
+            "  sudo %s ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
             "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
-            "Hardware trial --apply commands are suspended after the Ftst incident.\n",
-            program, program, program, program, program, program, program);
+            "Run the reviewed Ftst command only through ftst-supervised.sh. "
+            "Direct hardware trials remain suspended.\n",
+            program, program, program, program, program, program, program, program);
 }
 
 int main(int argc, char **argv) {
@@ -1149,9 +1151,13 @@ int main(int argc, char **argv) {
                   (ftst_check && strcmp(argv[4], "FTST-CHECK-Mac15,7-27.0") == 0) ||
                   (restore_unlock &&
                    strcmp(argv[4], "RESTORE-UNLOCK-Mac15,7-27.0") == 0));
+    bool apply_reviewed = argc == 5 && ftst_check &&
+                          strcmp(argv[2], "--apply-reviewed") == 0 &&
+                          strcmp(argv[3], "--confirm") == 0 &&
+                          strcmp(argv[4], "FTST-REVIEWED-Mac15,7-27.0") == 0;
     if (!((observe_baseline && read_only) ||
           (!observe_baseline && (trial || restore || ftst_check || restore_unlock) &&
-           (dry_run || apply)))) {
+           (dry_run || apply || apply_reviewed)))) {
         usage(argv[0]);
         return EXIT_FAILURE;
     }
@@ -1172,7 +1178,7 @@ int main(int argc, char **argv) {
     int result = observe_baseline ? run_observe_baseline(&smc) :
                  trial ? run_trial(&smc, program, apply) :
                  restore ? run_restore(&smc, apply) :
-                 ftst_check ? run_ftst_check(&smc, program, apply) :
+                 ftst_check ? run_ftst_check(&smc, program, apply_reviewed) :
                  run_restore_unlock(&smc, apply);
     IOServiceClose(smc.connection);
     return result;
