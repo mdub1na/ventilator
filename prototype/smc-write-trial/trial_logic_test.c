@@ -94,6 +94,27 @@ static void preflight_rejects_every_allowlist_mismatch(void) {
     assert(trial_make_plan(&input, &plan, error, sizeof(error)));
 }
 
+static void cpu_hotspot_rise_below_hard_limit_does_not_block_preflight(void) {
+    TrialPreflight input = valid_preflight();
+    TrialPlan plan = {0};
+    char error[160] = {0};
+    input.temperatures_c[0][0] = 53.56;
+    input.temperatures_c[1][0] = 52.12;
+    input.temperatures_c[2][0] = 50.69;
+    input.temperatures_c[3][0] = 52.02;
+    input.temperatures_c[4][0] = 66.28;
+    assert(trial_make_plan(&input, &plan, error, sizeof(error)));
+}
+
+static void ssd_temperature_rise_still_blocks_preflight(void) {
+    TrialPreflight input = valid_preflight();
+    TrialPlan plan = {0};
+    char error[160] = {0};
+    input.temperatures_c[4][2] = input.temperatures_c[0][2] + 5.01;
+    assert(!trial_make_plan(&input, &plan, error, sizeof(error)));
+    assert(strcmp(error, "a required temperature trend rose by more than 5 C") == 0);
+}
+
 static void transient_middle_cpu_peak_blocks_preflight(void) {
     TrialPreflight input = valid_preflight();
     TrialPlan plan = {0};
@@ -146,6 +167,8 @@ static void transport_allows_only_planned_targets_or_zero(void) {
 int main(void) {
     valid_preflight_builds_targets_above_current_cooling();
     preflight_rejects_every_allowlist_mismatch();
+    cpu_hotspot_rise_below_hard_limit_does_not_block_preflight();
+    ssd_temperature_rise_still_blocks_preflight();
     transient_middle_cpu_peak_blocks_preflight();
     rpm_encoding_follows_runtime_key_type();
     observed_rpm_requires_growth_and_target_tolerance();

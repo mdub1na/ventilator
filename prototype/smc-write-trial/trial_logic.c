@@ -47,7 +47,11 @@ bool trial_make_plan(
             }
         }
     }
-    for (unsigned sensor = 0; sensor < TRIAL_TEMPERATURE_COUNT; ++sensor) {
+    // TCMz is a rapidly changing CPU hotspot. Its hard 75 C limit still
+    // applies to every sample; the first-to-last rise check remains for the
+    // GPU and SSD sensors, where it has not shown the same idle spikes.
+    for (unsigned sensor = TRIAL_CPU_HOTSPOT_INDEX + 1;
+         sensor < TRIAL_TEMPERATURE_COUNT; ++sensor) {
         double rise = input->temperatures_c[TRIAL_PREFLIGHT_SAMPLES - 1][sensor] -
                       input->temperatures_c[0][sensor];
         if (rise > TRIAL_TEMPERATURE_MAX_RISE_C) {
