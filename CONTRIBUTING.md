@@ -27,6 +27,7 @@ make check
 
 ```bash
 make -C prototype/smc-read build
+make -C prototype/smc-read test
 make -C prototype/menu-bar build
 make -C prototype/login-item build
 make -C prototype/smc-write-trial clean build test

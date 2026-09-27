@@ -20,11 +20,15 @@ publishes: [local JSON snapshot]
 
 HTTP API нет. Локальный контракт — JSON схемы `1` из `smc-read --status-json`: `fan_count` может быть `null`, `fans` содержит индексы и nullable RPM/границы, `cpu_key` равен `TCMz`, `cpu_temp_c` может быть `null`, `selected_temperatures` содержит пары `key`/nullable `celsius` для `Tg0D` и `TH0a`. Команда `--temperatures-json` выводит `{ "schema": 1, "temperatures": [{ "key": "...", "celsius": ... }] }`; `temperatures: null` означает невозможность перечисления ключей. Некорректное/отсутствующее значение отдельного ключа становится `celsius: null`. Формирует JSON `prototype/smc-read/smc-read.c`, разбирает `prototype/kotlin-read/src/main/kotlin/ventilator/prototype/Main.kt`.
 
+Отдельный `sensor-availability.py` только для исследования M2 на `Mac15,7`/macOS 27.0 делает 120 чтений `--temperatures-json` через секунду и считает недоступные значения `TCMz`, `Tg0D`, `Tg05`, `Tg1B`, `TH0a`. Он сообщает, оставались ли два соседних GPU ключа доступны **в тот же снимок**, когда `Tg0D` был `null`; это наблюдение не подменяет датчик в приложении и не меняет допуск записи.
+
 ## 2a. Code anchors
 
 | Файл | Назначение |
 |---|---|
 | `prototype/smc-read/smc-read.c` | IOKit чтение и JSON схемы 1 |
+| `prototype/smc-read/sensor-availability.py` | ограниченная read-only серия доступности GPU ключей |
+| `prototype/smc-read/sensor-availability-test.py` | подставные проверки недоступного ключа и соседних значений |
 | `prototype/kotlin-read/src/main/kotlin/ventilator/prototype/Main.kt` | запуск дочернего процесса с таймаутом и разбор JSON |
 | `prototype/kotlin-read/src/main/kotlin/ventilator/prototype/Readings.kt` | состояние чтения и расчёт шкалы |
 | `prototype/kotlin-read/src/test/kotlin/ventilator/prototype/ReadingsTest.kt` | граничные значения и отсутствие датчика |
@@ -51,6 +55,7 @@ Reader и JVM-процесс могут работать вручную; Compose
 
 ```bash
 make -C prototype/smc-read build
+make -C prototype/smc-read test
 cd prototype/kotlin-read
 gradle --offline run --args=../smc-read/smc-read
 gradle --offline test

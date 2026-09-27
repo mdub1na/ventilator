@@ -47,6 +47,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: make -C prototype/smc-write-trial clean build test
+      - run: make -C prototype/smc-read test
 
   helper-ipc-contract:
     if: github.event_name == 'push' || github.event_name == 'pull_request'
