@@ -12,6 +12,11 @@ static uint64_t monotonicNanoseconds(void) {
     return (uint64_t)value.tv_sec * 1000000000u + (uint64_t)value.tv_nsec;
 }
 
+// CLOCK_MONOTONIC_RAW advances during sleep, unlike uptime-based timers.
+static uint64_t continuousNanoseconds(void) {
+    return clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+}
+
 @interface BaselineWatchController () {
     BaselineWatch _watch;
     uint64_t _generation;
@@ -40,8 +45,8 @@ static uint64_t monotonicNanoseconds(void) {
         @"last_sample_monotonic_ns": @(_lastSampleAt)
     } mutableCopy];
     if (_watch.status == BASELINE_WATCH_READ_FAILED) {
-        response[@"reason"] = [NSString stringWithUTF8String:
-            smc_baseline_result_name(_watch.last_read_result)];
+        response[@"reason"] = _watch.timing_failed ? @"sample_gap" :
+            [NSString stringWithUTF8String:smc_baseline_result_name(_watch.last_read_result)];
     }
     if (_watch.samples > 0 && _watch.status != BASELINE_WATCH_READ_FAILED) {
         SmcBaselineSnapshot *snapshot = &_watch.latest;
@@ -67,11 +72,12 @@ static uint64_t monotonicNanoseconds(void) {
         SmcBaselineSnapshot snapshot = {0};
         SmcBaselineResult result = smc_baseline_read(&snapshot);
         uint64_t sampledAt = monotonicNanoseconds();
+        uint64_t continuousAt = continuousNanoseconds();
         BOOL continueWatching = NO;
         @synchronized (self) {
             if (_generation != generation || _watch.status != BASELINE_WATCH_RUNNING) return;
             if (sampledAt == 0) result = SMC_BASELINE_UNEXPECTED_FORMAT;
-            baseline_watch_next(&_watch, second, result, &snapshot);
+            baseline_watch_next(&_watch, second, result, &snapshot, continuousAt);
             _lastSampleAt = sampledAt;
             continueWatching = _watch.status == BASELINE_WATCH_RUNNING;
         }
@@ -88,8 +94,9 @@ static uint64_t monotonicNanoseconds(void) {
         SmcBaselineSnapshot snapshot = {0};
         SmcBaselineResult result = smc_baseline_read(&snapshot);
         uint64_t sampledAt = monotonicNanoseconds();
+        uint64_t continuousAt = continuousNanoseconds();
         if (sampledAt == 0) result = SMC_BASELINE_UNEXPECTED_FORMAT;
-        baseline_watch_begin(&_watch, result, &snapshot);
+        baseline_watch_begin(&_watch, result, &snapshot, continuousAt);
         ++_generation;
         _startedAt = sampledAt;
         _lastSampleAt = sampledAt;
