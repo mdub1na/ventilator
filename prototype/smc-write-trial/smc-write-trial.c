@@ -785,13 +785,29 @@ static bool prompt_for_ftst_check(const char *program) {
     return strcmp(line, "APPLY FTST CHECK") == 0;
 }
 
+static bool prompt_for_ftst_minimum(const char *program) {
+    printf("Prepare this command in a second Terminal before continuing:\n"
+           "sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
+           "Type APPLY FTST MINIMUM RECOVERY to continue: ", program);
+    fflush(stdout);
+    if (!isatty(STDIN_FILENO)) {
+        fputs("ftst-minimum apply requires an interactive TTY\n", stderr);
+        return false;
+    }
+    char line[80];
+    if (fgets(line, sizeof(line), stdin) == NULL) return false;
+    line[strcspn(line, "\r\n")] = '\0';
+    return strcmp(line, "APPLY FTST MINIMUM RECOVERY") == 0;
+}
+
 static bool install_signal_handlers(void) {
     struct sigaction action = {0};
     action.sa_handler = on_signal;
     sigemptyset(&action.sa_mask);
     return sigaction(SIGINT, &action, NULL) == 0 &&
            sigaction(SIGTERM, &action, NULL) == 0 &&
-           sigaction(SIGQUIT, &action, NULL) == 0;
+           sigaction(SIGQUIT, &action, NULL) == 0 &&
+           sigaction(SIGALRM, &action, NULL) == 0;
 }
 
 typedef struct {
@@ -1086,6 +1102,77 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
     return EXIT_SUCCESS;
 }
 
+static int run_ftst_minimum(Smc *smc, const char *program, bool apply) {
+    char model[32] = {0};
+    char os_version[32] = {0};
+    if (!exact_environment(model, os_version)) {
+        return apply ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
+    }
+
+    TrialPreflight preflight = {0};
+    TrialPlan plan = {0};
+    LiveSnapshot baseline = {0};
+    if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
+        !snapshot_has_zero_targets(&baseline)) {
+        fputs("ftst-minimum blocked: preflight or zero-target baseline failed\n", stderr);
+        return apply ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
+    }
+    print_plan(apply ? "ftst-minimum-apply" : "ftst-minimum-dry-run",
+               model, os_version, &baseline, NULL);
+    if (!apply) {
+        puts("dry-run complete: no SMC writes were attempted");
+        return EXIT_SUCCESS;
+    }
+    if (geteuid() != 0 || !prompt_for_ftst_minimum(program) ||
+        !install_signal_handlers()) {
+        fputs("ftst-minimum blocked before any SMC write\n", stderr);
+        return TRIAL_EXIT_NO_WRITE;
+    }
+
+    puts("confirmation accepted; repeating preflight before any SMC write");
+    if (!collect_preflight(smc, model, os_version, &preflight, &plan, &baseline) ||
+        !snapshot_has_zero_targets(&baseline)) {
+        fputs("post-confirmation preflight failed; no SMC writes were attempted\n", stderr);
+        return TRIAL_EXIT_NO_WRITE;
+    }
+    print_plan("ftst-minimum-final", model, os_version, &baseline, NULL);
+    double minimum_rpm[TRIAL_FAN_COUNT] = {0};
+    for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+        minimum_rpm[fan] = preflight.fans[fan].min_rpm;
+    }
+
+    LiveBackend live = {.smc = smc, .known_keys = &baseline, .allowed_plan = NULL,
+                        .buffer_events = true};
+    TrialBackend backend = trial_backend(&live);
+    // The alarm starts only after confirmation and the repeated preflight. It
+    // cannot bound a kernel call, so the separate emergency command remains required.
+    alarm(180);
+    TrialRunStatus status = trial_rehearse_ftst_minimum_recovery(&backend, minimum_rpm);
+    alarm(0);
+    if (status == TRIAL_RUN_RESTORE_FAILED ||
+        status == TRIAL_RUN_WRITE_EFFECT_UNVERIFIED) {
+        fflush(stdout);
+        fputs("CRITICAL: minimum-target recovery was not verified; run prepared restore-unlock command\n",
+              stderr);
+        print_buffered_events(&live, stderr);
+        print_ftst_readback(&backend, "post_failure", stderr);
+        return EXIT_FAILURE;
+    }
+    print_buffered_events(&live, stdout);
+    print_ftst_readback(&backend, "final", stdout);
+    if (status == TRIAL_RUN_BASELINE_REJECTED) {
+        fputs("ftst-minimum blocked before any SMC write\n", stderr);
+        return TRIAL_EXIT_NO_WRITE;
+    }
+    if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
+        fputs("minimum-target state was not confirmed; system baseline observed locally; check independently\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    puts("minimum-target state observed and system baseline observed locally; check independently");
+    return EXIT_SUCCESS;
+}
+
 static int run_restore_unlock(Smc *smc, bool apply) {
     char model[32] = {0};
     char os_version[32] = {0};
@@ -1135,18 +1222,23 @@ static void usage(const char *program) {
             "  %s trial --dry-run\n"
             "  %s restore --dry-run\n"
             "  %s ftst-check --dry-run\n"
+            "  %s ftst-minimum --dry-run\n"
             "  %s restore-unlock --dry-run\n"
             "  %s observe-baseline --read-only\n"
+            "  sudo %s ftst-minimum --apply-reviewed --confirm FTST-MINIMUM-Mac15,7-27.0\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
             "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
-            "Ftst and direct hardware trials remain suspended.\n",
-            program, program, program, program, program, program, program);
+            "Run the reviewed minimum-target check only through ftst-minimum-supervised.sh. "
+            "Legacy Ftst and direct hardware trials remain suspended.\n",
+            program, program, program, program, program, program, program,
+            program, program);
 }
 
 int main(int argc, char **argv) {
     bool trial = argc >= 2 && strcmp(argv[1], "trial") == 0;
     bool restore = argc >= 2 && strcmp(argv[1], "restore") == 0;
     bool ftst_check = argc >= 2 && strcmp(argv[1], "ftst-check") == 0;
+    bool ftst_minimum = argc >= 2 && strcmp(argv[1], "ftst-minimum") == 0;
     bool restore_unlock = argc >= 2 && strcmp(argv[1], "restore-unlock") == 0;
     bool observe_baseline = argc >= 2 && strcmp(argv[1], "observe-baseline") == 0;
     bool dry_run = argc == 3 && strcmp(argv[2], "--dry-run") == 0;
@@ -1162,9 +1254,13 @@ int main(int argc, char **argv) {
                           strcmp(argv[2], "--apply-reviewed") == 0 &&
                           strcmp(argv[3], "--confirm") == 0 &&
                           strcmp(argv[4], "FTST-REVIEWED-Mac15,7-27.0") == 0;
+    bool minimum_reviewed = argc == 5 && ftst_minimum &&
+                            strcmp(argv[2], "--apply-reviewed") == 0 &&
+                            strcmp(argv[3], "--confirm") == 0 &&
+                            strcmp(argv[4], "FTST-MINIMUM-Mac15,7-27.0") == 0;
     if (!((observe_baseline && read_only) ||
-          (!observe_baseline && (trial || restore || ftst_check || restore_unlock) &&
-           (dry_run || apply || apply_reviewed)))) {
+          (!observe_baseline && (trial || restore || ftst_check || ftst_minimum || restore_unlock) &&
+           (dry_run || apply || apply_reviewed || minimum_reviewed)))) {
         usage(argv[0]);
         return EXIT_FAILURE;
     }
@@ -1182,15 +1278,24 @@ int main(int argc, char **argv) {
               stderr);
         return TRIAL_EXIT_NO_WRITE;
     }
+    const char *minimum_supervised = getenv("VENTILATOR_MINIMUM_SUPERVISED");
+    if (minimum_reviewed &&
+        (minimum_supervised == NULL || strcmp(minimum_supervised, "1") != 0)) {
+        fputs("ftst-minimum requires its supervised wrapper; no SMC access attempted\n",
+              stderr);
+        return TRIAL_EXIT_NO_WRITE;
+    }
 
     Smc smc = {0};
-    if (!smc_open(&smc)) return apply_reviewed ? TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
+    if (!smc_open(&smc)) return (apply_reviewed || minimum_reviewed) ?
+                                TRIAL_EXIT_NO_WRITE : EXIT_FAILURE;
     char absolute_program[PATH_MAX] = {0};
     const char *program = realpath(argv[0], absolute_program) != NULL ? absolute_program : argv[0];
     int result = observe_baseline ? run_observe_baseline(&smc) :
                  trial ? run_trial(&smc, program, apply) :
                  restore ? run_restore(&smc, apply) :
                  ftst_check ? run_ftst_check(&smc, program, apply_reviewed) :
+                 ftst_minimum ? run_ftst_minimum(&smc, program, minimum_reviewed) :
                  run_restore_unlock(&smc, apply);
     IOServiceClose(smc.connection);
     return result;
