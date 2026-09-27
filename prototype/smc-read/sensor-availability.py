@@ -18,8 +18,10 @@ INTERVAL_SECONDS = 1
 
 def summarize(readings: list[dict[str, float | None]]) -> dict:
     missing = {key: 0 for key in KEYS}
+    absent = {key: 0 for key in KEYS}
     valid = {key: [] for key in KEYS}
     fallback = {"Tg05": 0, "Tg1B": 0}
+    other_tg = {}
     for reading in readings:
         for key in KEYS:
             value = reading.get(key)
@@ -27,19 +29,26 @@ def summarize(readings: list[dict[str, float | None]]) -> dict:
                 missing[key] += 1
             else:
                 valid[key].append(value)
+            if key not in reading:
+                absent[key] += 1
         if reading.get("Tg0D") is None:
             for key in fallback:
                 if reading.get(key) is not None:
                     fallback[key] += 1
+            for key, value in reading.items():
+                if key.startswith("Tg") and key not in KEYS and value is not None:
+                    other_tg[key] = other_tg.get(key, 0) + 1
     return {
         "event": "summary",
         "samples": len(readings),
         "unavailable": missing,
+        "absent_from_enumeration": absent,
         "valid_range_c": {
             key: [min(values), max(values)] if values else None
             for key, values in valid.items()
         },
         "alternate_valid_when_Tg0D_unavailable": fallback,
+        "other_Tg_keys_valid_when_Tg0D_unavailable": dict(sorted(other_tg.items())),
     }
 
 
@@ -58,7 +67,20 @@ def read_temperatures(probe: Path) -> dict[str, float | None]:
     if data.get("schema") != 1 or not isinstance(temperatures, list) or not temperatures:
         raise RuntimeError("temperature enumeration is unavailable")
     found = {entry["key"]: entry["celsius"] for entry in temperatures}
-    return {key: found.get(key) for key in KEYS}
+    return found
+
+
+def sample_event(reading: dict[str, float | None], index: int, elapsed: float) -> dict:
+    sample = {"event": "sample", "index": index,
+              "elapsed_seconds": round(elapsed, 2),
+              "temperatures_c": {key: reading.get(key) for key in KEYS}}
+    if reading.get("Tg0D") is None:
+        sample["selected_keys_enumerated"] = {key: key in reading for key in KEYS}
+        sample["other_Tg_keys_with_values"] = sorted(
+            key for key, value in reading.items()
+            if key.startswith("Tg") and key not in KEYS and value is not None
+        )
+    return sample
 
 
 def main() -> int:
@@ -95,11 +117,11 @@ def main() -> int:
             reading = read_temperatures(probe)
             readings.append(reading)
             if index == 0 or index == SAMPLES - 1 or any(
-                reading[key] is None for key in KEYS
+                reading.get(key) is None for key in KEYS
             ):
-                print(json.dumps({"event": "sample", "index": index,
-                                  "elapsed_seconds": round(time.monotonic() - started, 2),
-                                  "temperatures_c": reading}), flush=True)
+                print(json.dumps(sample_event(
+                    reading, index, time.monotonic() - started
+                )), flush=True)
     except (OSError, RuntimeError, ValueError, KeyError, subprocess.TimeoutExpired) as error:
         print(json.dumps({"event": "read_failed", "index": len(readings),
                           "reason": str(error)}), file=sys.stderr, flush=True)
