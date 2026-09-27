@@ -342,6 +342,63 @@ static void transient_fan_modes_after_ftst_release_are_reported(void) {
     assert(mock.now >= 60.0);
 }
 
+static void ftst_minimum_recovery_zeros_targets_before_release(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .reclaim_only_with_zero_targets = true,
+                        .zero_targets_only_before_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    const double minimum[TRIAL_FAN_COUNT] = {1350, 1458};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) == TRIAL_RUN_SUCCEEDED);
+    assert(strcmp(mock.writes, "Ftst=1;T0=0;T1=0;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.targets[0] == 0 && mock.targets[1] == 0);
+    assert(mock.now >= 120.0);
+}
+
+static void ftst_minimum_recovery_failure_stays_critical(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .reject_zero_targets = true,
+                        .mode_zero_stays_released = true};
+    TrialBackend backend = backend_for(&mock);
+    const double minimum[TRIAL_FAN_COUNT] = {1350, 1458};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) ==
+           TRIAL_RUN_RESTORE_FAILED);
+    assert(mock.ftst == 0 && mock.modes[0] == 0 && mock.modes[1] == 0);
+    assert(mock.targets[0] == 1350 && mock.targets[1] == 1458);
+}
+
+static void ftst_minimum_recovery_rejects_unexpected_targets(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    const double different_minimum[TRIAL_FAN_COUNT] = {1400, 1500};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, different_minimum) ==
+           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;T0=0;T1=0;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void ftst_minimum_recovery_hot_reading_restores_early(void) {
+    MockBackend mock = {.modes = {3, 3}, .delay_ftst_enable = true,
+                        .heat_after_ftst_enable = true,
+                        .reclaim_on_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    const double minimum[TRIAL_FAN_COUNT] = {1350, 1458};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) ==
+           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+    assert(mock.released_ftst && mock.ftst_zero_at < 5.0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void ftst_minimum_recovery_rejects_hot_baseline_without_write(void) {
+    MockBackend mock = {.modes = {3, 3}, .high_temperature = true};
+    TrialBackend backend = backend_for(&mock);
+    const double minimum[TRIAL_FAN_COUNT] = {1350, 1458};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) ==
+           TRIAL_RUN_BASELINE_REJECTED);
+    assert(mock.write_count == 0);
+}
+
 static void transient_baseline_during_restore_does_not_verify_ftst(void) {
     MockBackend mock = {.modes = {3, 3},
                         .transient_baseline_on_second_ftst_read = true,
@@ -794,6 +851,11 @@ int main(void) {
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
     transient_fan_modes_after_ftst_release_are_reported();
+    ftst_minimum_recovery_zeros_targets_before_release();
+    ftst_minimum_recovery_failure_stays_critical();
+    ftst_minimum_recovery_rejects_unexpected_targets();
+    ftst_minimum_recovery_hot_reading_restores_early();
+    ftst_minimum_recovery_rejects_hot_baseline_without_write();
     transient_baseline_during_restore_does_not_verify_ftst();
     ftst_rejection_sends_release_and_observes();
     failed_ftst_write_with_delayed_effect_still_recovers();

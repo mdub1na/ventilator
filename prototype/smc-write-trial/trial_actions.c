@@ -407,6 +407,80 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
     return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
 }
 
+TrialRunStatus trial_rehearse_ftst_minimum_recovery(
+    TrialBackend *backend, const double minimum_rpm[TRIAL_FAN_COUNT]) {
+    if (backend == NULL || minimum_rpm == NULL || backend->write_ftst == NULL ||
+        backend->write_mode == NULL || backend->write_target == NULL ||
+        backend->read_observation == NULL || backend->wait_milliseconds == NULL ||
+        backend->monotonic_seconds == NULL || backend->should_stop == NULL) {
+        return TRIAL_RUN_RESTORE_FAILED;
+    }
+    for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+        if (!isfinite(minimum_rpm[fan]) || minimum_rpm[fan] <= 0.0) {
+            return TRIAL_RUN_BASELINE_REJECTED;
+        }
+    }
+
+    TrialObservation baseline = {0};
+    if (!backend->read_observation(backend->context, true, &baseline) ||
+        !trial_observation_is_baseline(&baseline) || !temperatures_safe(&baseline) ||
+        backend->should_stop(backend->context)) {
+        return TRIAL_RUN_BASELINE_REJECTED;
+    }
+    double started = backend->monotonic_seconds(backend->context);
+    if (!isfinite(started) || started < 0.0) return TRIAL_RUN_BASELINE_REJECTED;
+
+    bool write_ok = backend->write_ftst(backend->context, 1);
+    bool saw_ftst_one = false;
+    bool saw_minimum_targets = false;
+    // This phase has no mode or target writes. Stop as soon as the previously
+    // observed minimum-target state appears, or after at most five seconds.
+    for (unsigned half_second = 0; half_second <= 10; ++half_second) {
+        TrialObservation current = {0};
+        if (backend->should_stop(backend->context) ||
+            !backend->read_observation(backend->context, true, &current)) break;
+        if (backend->record_observation != NULL) {
+            backend->record_observation(backend->context, half_second, &current);
+        }
+        double elapsed = backend->monotonic_seconds(backend->context) - started;
+        if (!isfinite(elapsed) || elapsed < 0.0 || elapsed > 5.0) break;
+        if (!temperatures_safe(&current)) break;
+        if (current.ftst == 1) {
+            saw_ftst_one = true;
+            if (current.mode[0] == 0 && current.mode[1] == 0) {
+                saw_minimum_targets = true;
+                for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
+                    if (!isfinite(current.target_rpm[fan]) ||
+                        fabs(current.target_rpm[fan] - minimum_rpm[fan]) > 1.0) {
+                        saw_minimum_targets = false;
+                    }
+                }
+                break;
+            }
+            if (!system_modes_and_zero_targets(&current)) break;
+        } else if (current.ftst != 0 || !system_modes_and_zero_targets(&current)) {
+            break;
+        }
+        if (elapsed >= 5.0 || half_second == 10 ||
+            !backend->wait_milliseconds(backend->context, 500)) break;
+    }
+
+    if (!trial_restore_unlock(backend)) {
+        return trial_observe_after_ftst(backend).status == TRIAL_BASELINE_STABLE ?
+               TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED : TRIAL_RUN_RESTORE_FAILED;
+    }
+    if (trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+        if (!trial_restore_unlock(backend) ||
+            trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+            return TRIAL_RUN_RESTORE_FAILED;
+        }
+        saw_minimum_targets = false;
+    }
+    if (!write_ok || !saw_ftst_one) return TRIAL_RUN_WRITE_EFFECT_UNVERIFIED;
+    return saw_minimum_targets ? TRIAL_RUN_SUCCEEDED :
+                                 TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
+}
+
 static bool manual_state_matches(
     const TrialObservation *observation,
     const TrialPlan *plan,
