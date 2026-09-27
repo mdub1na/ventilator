@@ -1079,10 +1079,10 @@ static int run_ftst_check(Smc *smc, const char *program, bool apply) {
         return TRIAL_EXIT_NO_WRITE;
     }
     if (status == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED) {
-        fputs("ftst-check failed or was interrupted; system baseline verified\n", stderr);
+        fputs("ftst-check did not meet the unchanged-fan-state criteria or was interrupted; system baseline observed for 60 seconds\n", stderr);
         return EXIT_FAILURE;
     }
-    puts("Ftst 0 to 1 to 0 confirmed; fan modes and zero targets stayed at baseline");
+    puts("Ftst 0 to 1 to 0 confirmed; observed fan modes and targets stayed at baseline; system baseline observed for 60 seconds");
     return EXIT_SUCCESS;
 }
 
@@ -1137,12 +1137,10 @@ static void usage(const char *program) {
             "  %s ftst-check --dry-run\n"
             "  %s restore-unlock --dry-run\n"
             "  %s observe-baseline --read-only\n"
-            "  sudo %s ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
             "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
-            "Run the reviewed Ftst command only through ftst-supervised.sh. "
-            "Direct hardware trials remain suspended.\n",
-            program, program, program, program, program, program, program, program);
+            "Ftst and direct hardware trials remain suspended.\n",
+            program, program, program, program, program, program, program);
 }
 
 int main(int argc, char **argv) {
@@ -1178,6 +1176,11 @@ int main(int argc, char **argv) {
         fputs("hardware trials suspended after delayed Ftst state change; "
               "no SMC access attempted\n", stderr);
         return EXIT_FAILURE;
+    }
+    if (apply_reviewed) {
+        fputs("reviewed Ftst trial completed; further hardware trials suspended before SMC access\n",
+              stderr);
+        return TRIAL_EXIT_NO_WRITE;
     }
 
     Smc smc = {0};

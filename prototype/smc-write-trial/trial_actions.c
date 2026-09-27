@@ -108,6 +108,13 @@ static bool system_modes_and_zero_targets(const TrialObservation *observation) {
     return true;
 }
 
+static void note_fan_state(TrialBackend *backend, const TrialObservation *observation) {
+    if (backend->observed_fan_state_change != NULL &&
+        !system_modes_and_zero_targets(observation)) {
+        *backend->observed_fan_state_change = true;
+    }
+}
+
 static bool temperatures_safe(const TrialObservation *observation) {
     for (unsigned sensor = 0; sensor < TRIAL_TEMPERATURE_COUNT; ++sensor) {
         double temperature = observation->temperatures_c[sensor];
@@ -157,6 +164,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
     bool read_ok = false;
     for (unsigned attempt = 0; attempt < FTST_RELEASE_RETRIES; ++attempt) {
         if (backend->read_observation(backend->context, false, &current)) {
+            note_fan_state(backend, &current);
             read_ok = true;
             break;
         }
@@ -176,6 +184,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
         if (result.status == TRIAL_BASELINE_STABLE) return true;
         if (result.status != TRIAL_BASELINE_CHANGED ||
             !backend->read_observation(backend->context, false, &current)) return false;
+        note_fan_state(backend, &current);
         delayed_change = true;
     }
     if (current.ftst == 0) {
@@ -194,6 +203,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
     }
     if (!backend->read_observation(backend->context, false, &current) ||
         current.ftst != 1 || !modes_released(&current)) return false;
+    note_fan_state(backend, &current);
     if (backend->record_observation != NULL) {
         backend->record_observation(backend->context, 0, &current);
     }
@@ -208,12 +218,14 @@ bool trial_restore_unlock(TrialBackend *backend) {
             if (!backend->read_observation(backend->context, false, &current) ||
                 current.ftst != 1 || current.mode[0] != 0 || current.mode[1] != 0 ||
                 !modes_released(&current)) break;
+            note_fan_state(backend, &current);
             if (current.target_rpm[fan] > 1.0) {
                 (void)backend->write_target(backend->context, fan, 0.0);
             }
         }
         if (!backend->read_observation(backend->context, false, &current) ||
             !modes_released(&current)) return false;
+        note_fan_state(backend, &current);
         if (backend->record_observation != NULL) {
             backend->record_observation(backend->context, 0, &current);
         }
@@ -229,6 +241,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
             TrialObservation after_write = {0};
             if (!backend->read_observation(backend->context, false, &after_write) ||
                 !modes_released(&after_write)) return false;
+            note_fan_state(backend, &after_write);
             if (backend->record_observation != NULL) {
                 backend->record_observation(backend->context, second, &after_write);
             }
@@ -249,6 +262,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
         TrialObservation observation = {0};
         if (!backend->read_observation(backend->context, false, &observation) ||
             observation.ftst != 0 || !modes_released(&observation)) return false;
+        note_fan_state(backend, &observation);
         if (backend->record_observation != NULL) {
             backend->record_observation(backend->context, second, &observation);
         }
@@ -275,7 +289,9 @@ typedef struct {
 
 static bool trial_backend_observer_read(void *context, TrialObservation *output) {
     TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
-    return backend->read_observation(backend->context, false, output);
+    if (!backend->read_observation(backend->context, false, output)) return false;
+    note_fan_state(backend, output);
+    return true;
 }
 
 static bool trial_backend_observer_wait(void *context, unsigned milliseconds) {
@@ -316,6 +332,11 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
         return TRIAL_RUN_RESTORE_FAILED;
     }
 
+    bool observed_fan_state_change = false;
+    TrialBackend tracked_backend = *backend;
+    tracked_backend.observed_fan_state_change = &observed_fan_state_change;
+    backend = &tracked_backend;
+
     TrialObservation baseline = {0};
     if (!backend->read_observation(backend->context, true, &baseline) ||
         !trial_observation_is_baseline(&baseline) || !temperatures_safe(&baseline) ||
@@ -336,6 +357,7 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
         if (backend->record_observation != NULL) {
             backend->record_observation(backend->context, half_second, &after_write);
         }
+        note_fan_state(backend, &after_write);
         if (!trial_observation_is_baseline(&after_write)) {
             observed_effect = true;
             break;
@@ -365,7 +387,8 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
             }
             unlock_ok = false;
         }
-        return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
+        return unlock_ok && !observed_fan_state_change ?
+               TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
     }
 
     // An unsuccessful transport response does not prove that the command was

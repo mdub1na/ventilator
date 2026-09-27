@@ -26,6 +26,8 @@ typedef struct {
     bool delay_ftst_release;
     bool pending_ftst_release;
     bool reclaim_on_ftst_release;
+    bool transient_mode_zero_after_ftst_release;
+    double mode_zero_reclaim_at;
     bool reclaim_only_with_zero_targets;
     bool relatch_after_release;
     bool transient_baseline_on_second_ftst_read;
@@ -121,6 +123,11 @@ static bool mock_write_ftst(void *context, uint8_t value) {
     if (value == 0) {
         mock->released_ftst = true;
         mock->ftst_zero_at = mock->now;
+        if (mock->transient_mode_zero_after_ftst_release) {
+            mock->modes[0] = 0;
+            mock->modes[1] = 0;
+            mock->mode_zero_reclaim_at = mock->now + 3.0;
+        }
     }
     if (value == 1 && mock->unexpected_manual_after_unlock) mock->modes[0] = 1;
     return true;
@@ -128,6 +135,11 @@ static bool mock_write_ftst(void *context, uint8_t value) {
 
 static bool mock_read(void *context, bool temperatures, TrialObservation *output) {
     MockBackend *mock = context;
+    if (mock->transient_mode_zero_after_ftst_release &&
+        mock->released_ftst && mock->now >= mock->mode_zero_reclaim_at) {
+        mock->modes[0] = 3;
+        mock->modes[1] = 3;
+    }
     if (mock->released_ftst &&
         (mock->reclaim_on_ftst_release ||
          (mock->reclaim_only_with_zero_targets &&
@@ -318,6 +330,16 @@ static void ftst_check_round_trip_does_not_write_fan_keys(void) {
     assert(trial_check_ftst(&backend) == TRIAL_RUN_SUCCEEDED);
     assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
     assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void transient_fan_modes_after_ftst_release_are_reported(void) {
+    MockBackend mock = {.modes = {3, 3},
+                        .transient_mode_zero_after_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_check_ftst(&backend) == TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now >= 60.0);
 }
 
 static void transient_baseline_during_restore_does_not_verify_ftst(void) {
@@ -771,6 +793,7 @@ int main(void) {
     rejected_mode_with_very_late_effect_stays_unverified();
     system_modes_with_nonzero_target_still_require_cleanup();
     ftst_check_round_trip_does_not_write_fan_keys();
+    transient_fan_modes_after_ftst_release_are_reported();
     transient_baseline_during_restore_does_not_verify_ftst();
     ftst_rejection_sends_release_and_observes();
     failed_ftst_write_with_delayed_effect_still_recovers();
