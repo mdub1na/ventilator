@@ -23,6 +23,8 @@ test: smc-write-trial trial-logic-test trial-actions-test
 		output=$$(./smc-write-trial "$$1" --apply --confirm "$$2" 2>&1); status=$$?; \
 		test $$status -ne 0 && test "$$output" = 'hardware trials suspended after delayed Ftst state change; no SMC access attempted' || exit 1; \
 	done
+	@output=$$(./smc-write-trial ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0 2>&1); status=$$?; \
+		test $$status -eq 2 && test "$$output" = 'reviewed Ftst trial completed; further hardware trials suspended before SMC access'
 
 clean:
 	rm -f smc-write-trial trial-logic-test trial-actions-test

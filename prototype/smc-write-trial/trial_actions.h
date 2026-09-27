@@ -25,6 +25,8 @@ typedef struct {
     double (*monotonic_seconds)(void *context);
     bool (*should_stop)(void *context);
     void (*record_observation)(void *context, unsigned second, const TrialObservation *observation);
+    // Optional trace for a Ftst check: any observed mode/target deviation is a failed trial criterion.
+    bool *observed_fan_state_change;
 } TrialBackend;
 
 typedef enum {
