@@ -16,11 +16,11 @@ publishes: [local trial evidence]
 
 Одноразовый CLI для этапа M2-01 проверяет точное сочетание `Mac15,7` + macOS 27.0. Прямая команда строит цель выше текущего охлаждения для двух вентиляторов и выполняет пару «ручной режим → цель» с возвратом системного режима `3`. Отдельная короткая команда `ftst-check` проверяет только `Ftst: 0 → 1 → 0`; `restore` и `restore-unlock` доступны второму Terminal независимо от процесса пробы.
 
-Инструмент не входит в Ventilator.app, не является привилегированным helper и не принимает произвольные ключи, типы, байты или RPM. Прямая команда не записывает `Ftst`; короткая команда не записывает положительные цели RPM. `FS! ` не записывается никогда. Прямая аппаратная проба 2026-09-25 дошла до `F0Md`, которую SMC отклонил `0x82`. Последующая запись `Ftst=1` вызвала критический случай с отложенным изменением состояния и неподтверждённым восстановлением; обе команды пробы с `--apply` временно заблокированы до открытия SMC. Команды восстановления доступны.
+Инструмент не входит в Ventilator.app, не является привилегированным helper и не принимает произвольные ключи, типы, байты или RPM. Прямая команда не записывает `Ftst`; короткая команда не записывает положительные цели RPM. `FS! ` не записывается никогда. Прямая аппаратная проба 2026-09-25 дошла до `F0Md`, которую SMC отклонил `0x82`. Последующая запись `Ftst=1` вызвала критический случай с отложенным изменением состояния и неподтверждённым восстановлением. Прежние формы проб с `--apply` заблокированы до открытия SMC. Для единственного повторного опыта после ревью добавлены отдельная форма `--apply-reviewed` и сценарий с независимым чтением после процесса. Команды восстановления доступны.
 
 ## 2. Local contract
 
-HTTP API нет. CLI распознаёт девять точных форм; формы `trial --apply` и `ftst-check --apply` сейчас завершаются отказом до открытия SMC:
+HTTP API нет. CLI распознаёт десять точных форм; формы `trial --apply` и `ftst-check --apply` завершаются отказом до открытия SMC:
 
 ```text
 smc-write-trial trial --dry-run
@@ -31,10 +31,11 @@ smc-write-trial observe-baseline --read-only
 smc-write-trial trial --apply --confirm TRIAL-Mac15,7-27.0
 smc-write-trial restore --apply --confirm RESTORE-Mac15,7-27.0
 smc-write-trial ftst-check --apply --confirm FTST-CHECK-Mac15,7-27.0
+smc-write-trial ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0
 smc-write-trial restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0
 ```
 
-Доступные команды восстановления `--apply` требуют root. Процедуры `trial --apply` и `ftst-check --apply` сохраняются в коде для анализа, но заблокированы до открытия SMC после результата §5; до блокировки они требовали интерактивный TTY, отдельную фразу и повторный 10-секундный preflight. Неизвестный аргумент прекращает процесс до открытия пути записи.
+Доступные команды восстановления `--apply` требуют root. Процедуры `trial --apply` и `ftst-check --apply` сохраняются в коде для анализа, но заблокированы до открытия SMC после результата §5. `--apply-reviewed` требует root, интерактивный TTY, отдельную фразу и повторный 10-секундный preflight; запускать его следует только через `ftst-supervised.sh`. Сценарий выполняет два read-only preflight, затем после выхода пишущего процесса запускает независимый минутный наблюдатель; изменённое либо нечитаемое состояние вызывает `restore-unlock` и повторное наблюдение. Неизвестный аргумент прекращает процесс до открытия пути записи.
 
 ## 2a. Code anchors
 
@@ -43,6 +44,7 @@ smc-write-trial restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0
 | `prototype/smc-write-trial/smc-write-trial.c` | фиксированный AppleSMC transport, live preflight и CLI |
 | `prototype/smc-write-trial/trial_logic.c` | чистая проверка allowlist, температурного тренда, целей и кодировки RPM |
 | `prototype/smc-write-trial/trial_actions.c` | тестируемая state machine прямой пробы и восстановления |
+| `prototype/smc-write-trial/ftst-supervised.sh` | ограниченный аппаратный запуск и независимое чтение после завершения CLI |
 | `prototype/smc-write-trial/trial_logic_test.c` | границы preflight и runtime типов |
 | `prototype/smc-write-trial/trial_actions_test.c` | порядок записей и восстановление после частичного отказа |
 | `prototype/smc-write-trial/Makefile` | локальная сборка и тесты |
@@ -100,7 +102,7 @@ prototype/smc-write-trial/smc-write-trial ftst-check --dry-run
 prototype/smc-write-trial/smc-write-trial observe-baseline --read-only
 ```
 
-Команды `--apply` не относятся к проверке сборки. Новые пробы записи заблокированы; аварийные команды восстановления оставлены доступными. Их исходный порядок допуска описан в [прямом протоколе](../features/manual-fan-control-trial.md) и [протоколе `Ftst`](../features/ftst-check-trial.md).
+Команды `--apply` и `--apply-reviewed` не относятся к проверке сборки. Прямое управление и прежняя форма пробы `Ftst` заблокированы; ограниченная форма ожидает отдельного аппаратного опыта после ревью. Аварийные команды восстановления оставлены доступными. Исходный порядок допуска описан в [прямом протоколе](../features/manual-fan-control-trial.md) и [протоколе `Ftst`](../features/ftst-check-trial.md).
 
 ## 7. Limits
 

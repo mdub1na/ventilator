@@ -304,9 +304,14 @@ TrialRunStatus trial_check_ftst(TrialBackend *backend) {
                          backend->monotonic_seconds(backend->context) - started < 5.0 &&
                          !backend->should_stop(backend->context);
         if (!trial_restore_unlock(backend)) return TRIAL_RUN_RESTORE_FAILED;
-        if (after_write.ftst == 0 &&
-            trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
-            return TRIAL_RUN_RESTORE_FAILED;
+        // A baseline read at the start of recovery can precede a delayed
+        // effect. Observe after recovery regardless of the first readback.
+        if (trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+            if (!trial_restore_unlock(backend) ||
+                trial_observe_after_ftst(backend).status != TRIAL_BASELINE_STABLE) {
+                return TRIAL_RUN_RESTORE_FAILED;
+            }
+            unlock_ok = false;
         }
         return unlock_ok ? TRIAL_RUN_SUCCEEDED : TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED;
     }
