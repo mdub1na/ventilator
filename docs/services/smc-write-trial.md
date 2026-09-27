@@ -37,6 +37,8 @@ smc-write-trial restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0
 
 Доступные команды восстановления `--apply` требуют root. Процедуры `trial --apply` и `ftst-check --apply` сохраняются в коде для анализа, но заблокированы до открытия SMC после результата §5. `--apply-reviewed` требует root, интерактивный TTY, отдельную фразу и повторный 10-секундный preflight; запускать его следует только через `ftst-supervised.sh`. Сценарий выполняет два read-only preflight, затем после выхода пишущего процесса запускает независимый минутный наблюдатель; изменённое либо нечитаемое состояние вызывает `restore-unlock` и повторное наблюдение. Неизвестный аргумент прекращает процесс до открытия пути записи.
 
+Для `--apply-reviewed` код выхода `2` означает, что операция остановилась **до первой записи**: неверная среда, preflight, отсутствие root/TTY или подтверждения, ошибка установки обработчиков либо отказ финального чтения перед записью. Сценарий тогда не запускает минутное наблюдение. Код `1` может следовать за попыткой записи или неопределённым эффектом и всегда требует независимой проверки. Подставной тест сценария проверяет оба пути и вызов восстановления при обнаруженном изменении.
+
 ## 2a. Code anchors
 
 | Файл | Назначение |
@@ -45,6 +47,7 @@ smc-write-trial restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0
 | `prototype/smc-write-trial/trial_logic.c` | чистая проверка allowlist, температурного тренда, целей и кодировки RPM |
 | `prototype/smc-write-trial/trial_actions.c` | тестируемая state machine прямой пробы и восстановления |
 | `prototype/smc-write-trial/ftst-supervised.sh` | ограниченный аппаратный запуск и независимое чтение после завершения CLI |
+| `prototype/smc-write-trial/ftst-supervised-test.sh` | подставные проверки маршрутов отказа до записи и после неё |
 | `prototype/smc-write-trial/trial_logic_test.c` | границы preflight и runtime типов |
 | `prototype/smc-write-trial/trial_actions_test.c` | порядок записей и восстановление после частичного отказа |
 | `prototype/smc-write-trial/Makefile` | локальная сборка и тесты |
