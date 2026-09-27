@@ -70,6 +70,11 @@ bool trial_restore_unlock(TrialBackend *backend);
 
 TrialRunStatus trial_check_ftst(TrialBackend *backend);
 
+// Test-only rehearsal for the previously observed Ftst=1, mode-0, minimum-target state.
+// No CLI entry point is exposed; it never writes a positive target or a fan mode.
+TrialRunStatus trial_rehearse_ftst_minimum_recovery(
+    TrialBackend *backend, const double minimum_rpm[TRIAL_FAN_COUNT]);
+
 TrialRunStatus trial_execute_direct(
     TrialBackend *backend,
     const TrialPlan *plan,
