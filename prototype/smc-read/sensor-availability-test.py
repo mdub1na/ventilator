@@ -76,6 +76,32 @@ class SensorAvailabilityTest(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "enumeration is unavailable"):
                 AUDIT.read_temperatures(Path("/unused/read-only-probe"))
 
+    def test_paired_reader_drops_to_original_user_for_second_child(self):
+        response = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=json.dumps({"schema": 1, "temperatures": [
+                {"key": "Tg0D", "celsius": 42.0}
+            ]}), stderr=""
+        )
+        with patch.object(AUDIT.subprocess, "run", return_value=response) as run:
+            AUDIT.read_temperatures(Path("/unused/read-only-probe"), (501, 20))
+        self.assertEqual(run.call_args.kwargs["user"], 501)
+        self.assertEqual(run.call_args.kwargs["group"], 20)
+        self.assertEqual(run.call_args.kwargs["extra_groups"], [])
+
+    def test_paired_summary_distinguishes_root_and_user_gaps(self):
+        pairs = [
+            ({"Tg0D": None}, {"Tg0D": 43.0}),
+            ({"Tg0D": None}, {"Tg0D": None}),
+            ({"Tg0D": 42.0}, {"Tg0D": 43.0}),
+        ]
+        self.assertEqual(AUDIT.paired_summary(pairs)["Tg0D"], {
+            "both_available": 1,
+            "root_only_unavailable": 1,
+            "user_only_unavailable": 0,
+            "both_unavailable": 1,
+        })
+
 
 if __name__ == "__main__":
     unittest.main()
