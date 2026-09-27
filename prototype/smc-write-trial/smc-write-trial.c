@@ -979,7 +979,12 @@ static int run_restore(Smc *smc, bool apply) {
               stderr);
         return EXIT_FAILURE;
     }
-    puts("system mode and zero targets verified");
+    if (run_observe_baseline(smc) != EXIT_SUCCESS) {
+        fputs("CRITICAL: restore did not remain at system baseline for 60 seconds; reboot and check modes with read-only reader\n",
+              stderr);
+        return EXIT_FAILURE;
+    }
+    puts("system mode and zero targets observed for 60 seconds; confirm independently");
     return EXIT_SUCCESS;
 }
 
