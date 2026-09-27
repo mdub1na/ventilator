@@ -156,6 +156,12 @@ Unit-тест с этими пятью значениями проверяет, 
 
 Наблюдение показывает, что выбранный максимум CPU кратко меняется сильнее агрегата `TCMb` даже без намеренной нагрузки. Оно **не** доказывает ошибку `TCMz` и не даёт права заменять его средним значением в защитном допуске: серия не включала запись, изменение управления, температуру выше 75 °C или проверку возврата. Отсутствие пропусков GPU в этой минуте не отменяет ранее измеренные пропуски. Пороги и команды записи остаются прежними; M2-01 и M2-02 открыты.
 
+### 4.18. Однократное обнуление целей до очистки `Ftst` — только код
+
+После фактически наблюдавшегося на `Mac15,7`/macOS 27.0 состояния `Ftst=1`, режимов `[0,0]` и целей `[1350,1458]` аварийный возврат теперь один раз пытается обнулить каждую ненулевую цель **до** записи `Ftst=0`. Перед каждой попыткой он повторно читает состояние и допускает запись только при `Ftst=1` и обоих режимах `0`; при переходе хотя бы одного вентилятора в системный режим `3` остальные цели не записывает. Повторная запись режима `0` в этой ветке не нужна: оба режима уже прочитаны как `0`. После очистки `Ftst` сохраняются прежний ограниченный fallback и требование 61 непрерывного исходного снимка; отказ обнуления или возврата не становится успехом.
+
+Источник порядка: [код `macfan` на commit `94e6d52`](https://github.com/raminsharifi/MacFanControl/blob/94e6d52e0e5b3e321bbabe1fff8b1264f9dcfea8/src/control.rs) освобождает режим и пытается обнулить цель перед очисткой `Ftst`; автор проверял `Mac15,7` на macOS **26**, а не нашу 27.0. Подставные тесты проверяют порядок, отказ записи, необходимость обнуления до очистки в искусственной модели и переход второго вентилятора к системе между попытками. На реальном SMC новая последовательность **не запускалась**; она не подтверждает работоспособность аппаратного возврата и не снимает запрет повторять прежнюю пробу ради удачного preflight.
+
 ## 5. Code anchors
 
 | Назначение | Код |
@@ -232,7 +238,19 @@ Unit-тест с этими пятью значениями проверяет, 
 * **Given:** `Ftst=0`, оба режима `0`, цели на минимуме и система не забрала управление в первые 10 шагов.
 * **When:** аварийное восстановление однократно повторяет освобождение режимов и нулевых целей.
 * **Then:** успех возможен только после последующей непрерывной минуты исходных снимков; оставшиеся ненулевыми цели дают критический результат.
-* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_release_retries_zero_targets_only_after_unlock_clears`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_without_system_takeover_is_not_verified`
+* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_postclear_fallback_recovers_when_preclear_zero_rejected`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_without_system_takeover_is_not_verified`
+
+### Scenario: Система забрала второй вентилятор между попытками обнуления
+* **Given:** `Ftst=1`, оба режима `0` и обе цели на минимуме.
+* **When:** после обнуления первой цели второй вентилятор перешёл в режим `3`.
+* **Then:** цель второго вентилятора не записывается; проба не объявляет восстановление без полного исходного интервала.
+* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_preclear_stops_when_system_reclaims_second_fan`
+
+### Scenario: `Ftst` очистился между двумя попытками обнуления
+* **Given:** `Ftst=1`, оба режима `0` и обе цели на минимуме.
+* **When:** после обнуления первой цели следующее чтение обнаружило `Ftst=0`.
+* **Then:** вторая цель не записывается по устаревшему допуску; команда сообщает неподтверждённый возврат. Внешний supervised-сценарий запускает независимое наблюдение и при необходимости аварийное восстановление.
+* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_preclear_stops_when_unlock_clears_between_targets`
 
 ### Scenario: Один вентилятор уже передан системе
 * **Given:** после очистки `Ftst` режимы `[0,3]`, а система не вернула всю пару к исходному состоянию.
@@ -278,6 +296,6 @@ Unit-тест с этими пятью значениями проверяет, 
 
 ### Scenario: Аварийный возврат при минимальных целях
 * **Given:** `Ftst=1`, режимы `[0, 0]`, цели `[1350, 1458]`.
-* **When:** фиксированная команда очищает `Ftst` без предварительной записи нулевых целей.
-* **Then:** успех выдаётся только после непрерывной минуты исходных снимков; при отсутствии системного возврата или повторном `Ftst=1` выдаётся отказ.
-* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_restore_allows_firmware_minimum_targets_before_release`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_without_system_takeover_is_not_verified`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_relatched_during_observation_is_not_verified`
+* **When:** команда перечитывает оба режима, однократно пытается обнулить ненулевые цели и затем очищает `Ftst`.
+* **Then:** успех выдаётся только после непрерывной минуты исходных снимков; отказ обнуления не препятствует попытке очистить `Ftst`, но оставшаяся ненулевая цель или повторный `Ftst=1` дают отказ.
+* **Automated:** `prototype/smc-write-trial/trial_actions_test.c#ftst_restore_allows_firmware_minimum_targets_before_release`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_without_system_takeover_is_not_verified`, `prototype/smc-write-trial/trial_actions_test.c#ftst_preclear_zero_targets_enables_system_takeover`, `prototype/smc-write-trial/trial_actions_test.c#ftst_release_relatched_during_observation_is_not_verified`
