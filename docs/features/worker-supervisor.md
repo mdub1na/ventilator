@@ -14,7 +14,7 @@ tags: [macos, smc, fan-control, safety]
 
 ## 1. Назначение
 
-Изолированный `WorkerSupervisor.c` проверяет порядок процессов будущей операции M2-02. Он хранит [lease и журнал](helper-control-lease.md) в родителе и создаёт отдельные дочерние процессы для операции, восстановления и независимого чтения. В тестах все аппаратные действия подставные; настоящий SMC reader не вызывается. Модуль не подключён к `daemon-status`, UI или CLI записи, действующий helper сохраняет `write_available=false`.
+`WorkerSupervisor.c` проверяет порядок процессов будущей операции M2-02. Он хранит [lease и журнал](helper-control-lease.md) в родителе и создаёт отдельные дочерние процессы для операции, восстановления и независимого чтения. В процессных тестах аппаратные действия подставные. Отдельная [подписанная read-only интеграция](helper-supervisor-probe.md) запускает его из daemon через новый executable с настоящим фиксированным SMC reader и check-only callbacks. Writer не подключён, действующий helper сохраняет `write_available=false`.
 
 ## 2. Правила
 
@@ -93,6 +93,8 @@ tags: [macos, smc, fan-control, safety]
 * **Automated:** `prototype/helper-ipc/WorkerSupervisorTest.c::unsafe_ownership_files_never_allow_a_callback`
 
 ## 4. Проверка и ограничения
+
+`worker_supervisor_observe_baseline` повторно использует ограниченный observer для начального допуска: чистый journal, отдельный PID, полная минута и успешный reap, без `pending` и recovery proof. Отказ/остановка reader запрещают стабильность; `WorkerSupervisorTest` проверяет реальное начальное окно и отказные процессы. Эта функция нужна [root read-only интеграции](helper-supervisor-probe.md); дальнейшее аппаратное поведение этим не разрешается.
 
 Команда `make -C prototype/helper-ipc worker-supervisor-test` работает без `sudo`, службы или регистрации. Начальное окно допуска lease подставное; окно **после** recovery использует настоящие процессы и настоящие часы. Прерываются только собственные тестовые процессы; callbacks не обращаются к SMC. Отказные тесты отдельно доступны через `./WorkerSupervisorTest --fast` для проверки мутаций.
 

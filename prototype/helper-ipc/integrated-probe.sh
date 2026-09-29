@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -84,7 +84,7 @@ prepare() {
         *) usage ;;
     esac
     (cd ../desktop-app && gradle createDistributable -Pcompose.desktop.packaging.checkJdkVendor=false)
-    make daemon-status helper-status libhelper-probe.dylib
+    make daemon-status helper-status libhelper-probe.dylib supervisor-probe
     scratch=$(mktemp -d "$probe_root/ventilator-integrated-probe.XXXXXX")
     chmod 700 "$scratch"
     app="$scratch/Ventilator.app"
@@ -98,6 +98,9 @@ prepare() {
     [ -f "$app/Contents/app/resources/libhelper-probe.dylib" ] || { echo "JNI bridge missing" >&2; exit 1; }
     mkdir -p "$app/Contents/Library/LaunchDaemons" "$app/Contents/Resources"
     cp ./daemon-status "$app/Contents/Resources/daemon-status"
+    cp ./supervisor-probe "$app/Contents/Resources/supervisor-probe"
+    codesign --force --sign "$identity" --timestamp=none \
+        --identifier com.ventilator.helper-ipc.signed-supervisor "$app/Contents/Resources/supervisor-probe"
     codesign --force --sign "$identity" --timestamp=none \
         --identifier com.ventilator.helper-ipc.signed-daemon "$app/Contents/Resources/daemon-status"
     team=$(codesign -dv --verbose=4 "$app/Contents/Resources/daemon-status" 2>&1 | sed -n 's/^TeamIdentifier=//p')
@@ -127,6 +130,8 @@ EOF
     daemon_requirement="anchor apple generic and identifier \"com.ventilator.helper-ipc.signed-daemon\" and certificate leaf[subject.OU] = \"$team\""
     codesign -v -R="$client_requirement" "$app"
     codesign -v -R="$daemon_requirement" "$app/Contents/Resources/daemon-status"
+    supervisor_requirement="anchor apple generic and identifier \"com.ventilator.helper-ipc.signed-supervisor\" and certificate leaf[subject.OU] = \"$team\""
+    codesign -v -R="$supervisor_requirement" "$app/Contents/Resources/supervisor-probe"
     : >"$scratch/.ventilator-integrated-probe"
     trap - EXIT HUP INT TERM
     echo "prepared=$app"
@@ -199,6 +204,39 @@ case "$action" in
         ventilator --helper-request
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
+        ;;
+    supervisor-start)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        status=$(ventilator --helper-supervisor-start)
+        echo "supervisor-start=$status"
+        case "$status" in *'"state":"running"'*) ;; *) echo "supervisor did not start" >&2; exit 1 ;; esac
+        pid=$(printf '%s\n' "$status" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
+        is_uint "$pid" && [ "$pid" -gt 0 ] || { echo "runner PID missing" >&2; exit 1; }
+        [ "$(ps -p "$pid" -o uid= | tr -d ' ')" = 0 ] || { echo "runner is not UID 0" >&2; exit 1; }
+        [ "$(ps -p "$pid" -o comm=)" = "$app/Contents/Resources/supervisor-probe" ] || { echo "runner path differs" >&2; exit 1; }
+        echo "supervisor-process=verified uid=0 pid=$pid"
+        ;;
+    supervisor-status)
+        require_app "$@"
+        ventilator --helper-supervisor-status
+        ;;
+    supervisor-cleanup)
+        require_app "$@"
+        status=$(ventilator --helper-supervisor-cleanup)
+        attempt=0
+        while [ "$attempt" -lt 10 ]; do
+            case "$status" in
+                *'"state":"cleaned"'*) echo "supervisor-cleanup=$status"; exit 0 ;;
+                *'"state":"running"'*) ;;
+                *) echo "supervisor state was not cleaned: $status" >&2; exit 1 ;;
+            esac
+            sleep 0.2
+            status=$(ventilator --helper-supervisor-status)
+            attempt=$((attempt + 1))
+        done
+        echo "supervisor still running; wait for completion before unregister" >&2
+        exit 1
         ;;
     startup-audit-crash-run)
         require_app "$@"
@@ -479,6 +517,17 @@ case "$action" in
         ;;
     unregister)
         require_app "$@"
+        if [ "$(ventilator --helper-registration-status)" = enabled ]; then
+            supervisor=$(ventilator --helper-supervisor-status)
+            case "$supervisor" in
+                *'"state":"idle"'*|*'"state":"cleaned"'*) ;;
+                *) echo "run supervisor-cleanup and confirm cleaned before unregister: $supervisor" >&2; exit 1 ;;
+            esac
+        fi
+        [ ! -d /private/var/run/com.ventilator.supervisor-read-only ] || {
+            echo "root probe state remains; enable the daemon and run supervisor-cleanup before unregister" >&2
+            exit 1
+        }
         ventilator --helper-unregister
         after=$(ventilator --helper-registration-status)
         [ "$after" = notRegistered ] || [ "$after" = notFound ] || { echo "CRITICAL: registration=$after" >&2; exit 1; }
@@ -487,6 +536,10 @@ case "$action" in
         ;;
     cleanup)
         require_app "$@"
+        [ ! -d /private/var/run/com.ventilator.supervisor-read-only ] || {
+            echo "root probe state remains; use supervisor-cleanup before deleting the package" >&2
+            exit 1
+        }
         after=$(ventilator --helper-registration-status)
         [ "$after" = notRegistered ] || [ "$after" = notFound ] || { echo "unregister daemon before cleanup: $after" >&2; exit 1; }
         service_absent || { echo "system service still present" >&2; exit 1; }

@@ -39,6 +39,7 @@ typedef enum {
     SUPERVISOR_RECOVERY_FAILED,
     SUPERVISOR_OBSERVATION_FAILED,
     SUPERVISOR_STOP_FAILED,
+    SUPERVISOR_BASELINE_READY,
 } WorkerSupervisorResult;
 
 typedef struct {
@@ -49,6 +50,12 @@ typedef struct {
     pid_t observer_pid;
     unsigned reaped;
 } WorkerSupervisorReport;
+
+// Read-only admission: a bounded, owned reader produces a fresh complete
+// baseline. No intent or recovery proof is created and no action runs.
+WorkerSupervisorReport worker_supervisor_observe_baseline(
+    int directory_fd, ControlLease *lease, SmcBaselineSnapshot *latest,
+    WorkerSupervisorBackend backend, WorkerSupervisorLimits limits);
 
 // Saves the persistent intent BEFORE forking. Stops/reaps each owned child
 // before the next phase. Only the parent validates timed snapshots and consumes

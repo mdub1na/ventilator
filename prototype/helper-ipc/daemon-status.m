@@ -1,6 +1,7 @@
 #import "HelperStatus.h"
 #import "BaselineWatchController.h"
 #import "StartupAuditController.h"
+#import "SupervisorProbeController.h"
 #import "HelperTemperatureValue.h"
 #include "SmcBaselineRead.h"
 #include <ctype.h>
@@ -61,6 +62,15 @@
 - (void)fetchBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
     reply([[BaselineWatchController shared] status]);
 }
+- (void)startSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[SupervisorProbeController shared] start]);
+}
+- (void)fetchSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[SupervisorProbeController shared] status]);
+}
+- (void)cleanupSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[SupervisorProbeController shared] cleanup]);
+}
 @end
 
 @interface DaemonListener : NSObject <NSXPCListenerDelegate>
@@ -112,6 +122,11 @@ static BOOL validClientIdentifier(const char *identifier) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc == 2 && strcmp(argv[1], "--probe-signature-check") == 0) {
+            BOOL valid = SupervisorProbeRunnerURL() != nil;
+            puts(valid ? "supervisor-signature=accepted" : "supervisor-signature=rejected");
+            return valid ? 0 : 1;
+        }
         if (argc != 4 || !validTeamID(argv[2]) || !validClientIdentifier(argv[3])) {
             fprintf(stderr, "Usage: %s MACH_SERVICE_NAME EXPECTED_CLIENT_TEAM_ID EXPECTED_CLIENT_IDENTIFIER\n", argv[0]);
             return 2;

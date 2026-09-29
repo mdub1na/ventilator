@@ -125,6 +125,10 @@ date: 2026-09-23
 | `flock` после `fork` имеет общие ссылки; явное `LOCK_UN` ребёнка сняло бы блокировку родителя. `_exit` закрывает дескрипторы, причём завершение может задерживаться. | Локальные `man 2 flock`, SDK macOS; [Apple flock](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/flock.2.html), [Apple exit](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/_exit.2.html). | Код только закрывает lock, хранит PID до разрешения callback и при takeover дополнительно проверяет его отсутствие через публичный `proc_pidinfo/PROC_PIDTBSDINFO`. Любой живой, zombie, повторно использованный или неопределённый PID запрещает новое восстановление; ему не отправляется сигнал. |
 | В тестовой реализации смерть supervisor вызывает EOF в отдельном потоке worker; новый recovery-only владелец заново проходит окно наблюдения. Остановленный worker сохраняет владение и блокирует restart. | `prototype/helper-ipc/SupervisorOwnership.c`, `prototype/helper-ipc/WorkerSupervisorTest.c`; [протокол](../features/worker-supervisor.md), `Mac15,7`/macOS 27.0, пользовательские процессы с подставным backend. | Покрыта потеря тестового владельца в трёх фазах. В root daemon/SMC writer это не интегрировано; отмена уже принятой SMC команды, неостанавливаемый kernel call и полный reboot с журналом не проверены. M2 остаётся открытым. |
 
+### 1c. Подписанная read-only интеграция supervisor — подготовка
+
+На `Mac15,7`/macOS 27.0 собраны C/Objective-C/JNI и настоящий Compose пакет с отдельным supervisor executable. Новый ограниченный reader проверен процессными тестами с подставным оборудованием, приватное состояние и report — отказными тестами. `supervisor-signature-smoke.sh` принял sibling с точным identifier и Apple Development Team, отклонил другой identifier, ad hoc подпись, повреждение и отсутствие файла; task и SMC чтение не запускались. [Протокол](../features/helper-supervisor-probe.md) фиксирует реальные ограничения. Root выполнение пока ожидает Touch ID; этот результат не подтверждает аппаратное восстановление и не закрывает M2.
+
 ## 2. Решения на текущем этапе
 
 

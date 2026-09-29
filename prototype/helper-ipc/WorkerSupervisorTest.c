@@ -467,6 +467,37 @@ static void unsafe_ownership_files_never_allow_a_callback(void) {
     fixture_free(fixture, dir);
 }
 
+static void initial_baseline_is_bounded_and_never_recovery_proof(bool full) {
+    const Reading readings[] = {BASELINE, CHANGED, READ_FAILED, READ_STOPPED};
+    for (unsigned index = full ? 0 : 1; index < sizeof(readings) / sizeof(readings[0]); ++index) {
+        int dir;
+        Fixture *fixture = fixture_new(&dir);
+        fixture->reading = readings[index];
+        ControlLease lease = held_lease();
+        SmcBaselineSnapshot latest = {0};
+        WorkerSupervisorBackend backend = {.context = fixture, .recover = recover, .read = read_snapshot};
+        uint64_t started = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        WorkerSupervisorReport report = worker_supervisor_observe_baseline(dir, &lease, &latest, backend, limits());
+        uint64_t duration = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - started;
+        assert(report.operation_pid == 0 && report.recovery_pid == 0 && report.reaped == 1);
+        assert_reaped(report.observer_pid);
+        assert(fixture->operations == 0 && fixture->recoveries == 0);
+        assert(control_intent_read(dir) == CONTROL_INTENT_CLEAR && !lease.recovery_verified);
+        assert(!control_lease_take_recovery_proof(&lease));
+        if (readings[index] == BASELINE) {
+            assert(report.result == SUPERVISOR_BASELINE_READY && lease.state == CONTROL_LEASE_STABLE);
+            assert(duration >= CONTROL_LEASE_BASELINE_NS && duration < 75 * SECOND);
+            assert(lease.samples == 61 && smc_baseline_is_system(&latest));
+            assert(control_lease_claim(&lease, 7, clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW), true,
+                                       CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &latest));
+        } else {
+            assert(report.result == SUPERVISOR_OBSERVATION_FAILED);
+            assert(lease.state != CONTROL_LEASE_STABLE && duration < 10 * SECOND);
+        }
+        fixture_free(fixture, dir);
+    }
+}
+
 int main(int argc, char **argv) {
     (void)argv;
     // Fast-only mode also supports focused mutation checks without a minute wait.
@@ -483,6 +514,7 @@ int main(int argc, char **argv) {
     stopped_or_recorded_live_worker_blocks_a_new_owner();
     missing_or_malformed_worker_record_never_allows_restart();
     unsafe_ownership_files_never_allow_a_callback();
+    initial_baseline_is_bounded_and_never_recovery_proof(argc == 1);
     puts("worker supervisor process tests passed (no SMC access)");
     return 0;
 }

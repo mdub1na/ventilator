@@ -35,6 +35,15 @@
     reply(@{@"protocol_version": @(HelperStatusProtocolVersion),
             @"state": @"unsupported_provider"});
 }
+- (void)startSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion), @"state": @"unsupported_provider"});
+}
+- (void)fetchSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion), @"state": @"unsupported_provider"});
+}
+- (void)cleanupSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply(@{@"protocol_version": @(HelperStatusProtocolVersion), @"state": @"unsupported_provider"});
+}
 @end
 
 @interface StatusListener : NSObject <NSXPCListenerDelegate>

@@ -24,7 +24,7 @@ make report
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 - [x] [research-helper-boundary](research/research-helper-boundary.md) — проверенные свойства macOS и граница read-only helper для M2-02; аппаратное восстановление ещё не реализовано.
 
-### Features (10)
+### Features (11)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
@@ -37,6 +37,7 @@ make report
 - [ ] [helper-control-lease](features/helper-control-lease.md) — изолированная модель владения будущей пробой управления; переходы проверены unit-тестами, интеграция и аппаратная проверка открыты.
 
 - [x] [worker-supervisor](features/worker-supervisor.md) — отдельный процесс контролирует сроки, сбор worker и новый recovery proof; проверено с подставным оборудованием.
+- [ ] [helper-supervisor-probe](features/helper-supervisor-probe.md) — подписанный executable из root helper с фиксированным read-only backend; код и подпись проверены, root выполнение ожидает Touch ID.
 
 ### Screens / Flows (2)
 

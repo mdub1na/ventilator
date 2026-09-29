@@ -162,7 +162,7 @@ static void observe_child(int output, WorkerSupervisorBackend backend) {
 
 static bool accept_observation(ControlLease *lease, const Observation *observation,
                                 uint64_t launched_ns, uint64_t received_ns,
-                                unsigned samples) {
+                                unsigned samples, bool recovering) {
     if (observation->started_ns < launched_ns ||
         observation->finished_ns < observation->started_ns ||
         observation->finished_ns - observation->started_ns > MAX_READ_NS ||
@@ -170,19 +170,22 @@ static bool accept_observation(ControlLease *lease, const Observation *observati
         received_ns - observation->finished_ns > 2 * SECOND ||
         (samples > 0 && observation->started_ns < lease->last_sample_ns)) return false;
     if (samples == 0) {
-        control_lease_recovery_started(lease, observation->result,
+        if (recovering) control_lease_recovery_started(lease, observation->result,
                                        &observation->snapshot, observation->finished_ns);
+        else control_lease_start(lease, CONTROL_INTENT_CLEAR, observation->result,
+                                  &observation->snapshot, observation->finished_ns);
     } else {
         control_lease_sample(lease, observation->result,
                              &observation->snapshot, observation->finished_ns);
     }
-    return lease->state == CONTROL_LEASE_VERIFYING_RECOVERY ||
-           (lease->state == CONTROL_LEASE_STABLE && lease->recovery_verified);
+    return lease->state == (recovering ? CONTROL_LEASE_VERIFYING_RECOVERY : CONTROL_LEASE_OBSERVING) ||
+           (lease->state == CONTROL_LEASE_STABLE && lease->recovery_verified == recovering);
 }
 
 static bool supervise_observer(int input, pid_t child, ControlLease *lease,
                                 uint64_t launched_ns, uint64_t deadline,
-                                uint64_t reap_ns, WorkerSupervisorReport *report) {
+                                uint64_t reap_ns, WorkerSupervisorReport *report,
+                                bool recovering, SmcBaselineSnapshot *latest) {
     Observation observation = {0};
     size_t filled = 0;
     unsigned samples = 0;
@@ -201,7 +204,8 @@ static bool supervise_observer(int input, pid_t child, ControlLease *lease,
                 if (filled == sizeof(observation)) {
                     if (samples >= CONTROL_LEASE_REQUIRED_SAMPLES ||
                         !accept_observation(lease, &observation, launched_ns,
-                                            now_ns(), samples)) break;
+                                            now_ns(), samples, recovering)) break;
+                    if (latest != NULL) *latest = observation.snapshot;
                     ++samples;
                     progress_deadline = observation.finished_ns + MAX_READ_NS + 2 * SECOND;
                     filled = 0;
@@ -226,7 +230,7 @@ static bool supervise_observer(int input, pid_t child, ControlLease *lease,
         if (reaped && eof) {
             return exited_ok && filled == 0 &&
                    samples == CONTROL_LEASE_REQUIRED_SAMPLES &&
-                   lease->state == CONTROL_LEASE_STABLE && lease->recovery_verified;
+                   lease->state == CONTROL_LEASE_STABLE && lease->recovery_verified == recovering;
         }
         pause_ns(UINT64_C(10000000));
     }
@@ -241,6 +245,56 @@ static bool can_supervise(WorkerSupervisorBackend backend, WorkerSupervisorLimit
     return limits_valid(limits) && backend.recover != NULL && backend.read != NULL &&
            sigaction(SIGCHLD, NULL, &child_action) == 0 &&
            child_action.sa_handler == SIG_DFL && (child_action.sa_flags & SA_NOCLDWAIT) == 0;
+}
+
+static bool observe_owned(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits, WorkerSupervisorReport *report,
+    bool recovering, SmcBaselineSnapshot *latest) {
+    int connection = -1;
+    uint64_t deadline = 0;
+    int channel[2];
+    if (pipe(channel) != 0) return false;
+    if (fcntl(channel[0], F_SETFL, O_NONBLOCK) != 0) {
+        (void)close(channel[0]);
+        (void)close(channel[1]);
+        return false;
+    }
+    uint64_t launched_ns = now_ns();
+    if (!deadline_for(limits.observation_ns, &deadline)) {
+        (void)close(channel[0]);
+        (void)close(channel[1]);
+        return false;
+    }
+    report->observer_pid = spawn_worker(directory_fd, deadline, &connection);
+    if (report->observer_pid == 0) {
+        (void)close(channel[0]);
+        observe_child(channel[1], backend);
+    }
+    (void)close(channel[1]);
+    bool verified = report->observer_pid > 0 &&
+        supervise_observer(channel[0], report->observer_pid, lease,
+                            launched_ns, deadline, limits.reap_ns, report, recovering, latest);
+    (void)close(channel[0]);
+    if (connection >= 0) (void)close(connection);
+    return verified;
+}
+
+WorkerSupervisorReport worker_supervisor_observe_baseline(
+    int directory_fd, ControlLease *lease, SmcBaselineSnapshot *latest,
+    WorkerSupervisorBackend backend, WorkerSupervisorLimits limits) {
+    WorkerSupervisorReport report = {.result = SUPERVISOR_BLOCKED};
+    if (lease == NULL || latest == NULL || !can_supervise(backend, limits) ||
+        control_intent_read(directory_fd) != CONTROL_INTENT_CLEAR) return report;
+    int owner_lock = supervisor_ownership_acquire(directory_fd, false);
+    if (owner_lock < 0) return report;
+    memset(lease, 0, sizeof(*lease));
+    report.result = SUPERVISOR_OBSERVATION_FAILED;
+    if (observe_owned(directory_fd, lease, backend, limits, &report, false, latest))
+        report.result = SUPERVISOR_BASELINE_READY;
+    else control_lease_sleep(lease);
+    (void)close(owner_lock);
+    return report;
 }
 
 static WorkerSupervisorReport recover_owned(
@@ -264,30 +318,7 @@ static WorkerSupervisorReport recover_owned(
     if (recovery_exit != WORKER_EXITED) return report;
 
     report.result = SUPERVISOR_OBSERVATION_FAILED;
-    int channel[2];
-    if (pipe(channel) != 0) return report;
-    if (fcntl(channel[0], F_SETFL, O_NONBLOCK) != 0) {
-        (void)close(channel[0]);
-        (void)close(channel[1]);
-        return report;
-    }
-    uint64_t launched_ns = now_ns();
-    if (!deadline_for(limits.observation_ns, &deadline)) {
-        (void)close(channel[0]);
-        (void)close(channel[1]);
-        return report;
-    }
-    report.observer_pid = spawn_worker(directory_fd, deadline, &connection);
-    if (report.observer_pid == 0) {
-        (void)close(channel[0]);
-        observe_child(channel[1], backend);
-    }
-    (void)close(channel[1]);
-    bool verified = report.observer_pid > 0 &&
-        supervise_observer(channel[0], report.observer_pid, lease,
-                            launched_ns, deadline, limits.reap_ns, &report);
-    (void)close(channel[0]);
-    if (connection >= 0) (void)close(connection);
+    bool verified = observe_owned(directory_fd, lease, backend, limits, &report, true, NULL);
     if (verified && control_intent_clear_verified(directory_fd, lease)) {
         report.result = SUPERVISOR_RECOVERED;
     } else {
