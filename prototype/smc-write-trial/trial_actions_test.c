@@ -42,6 +42,9 @@ typedef struct {
     bool heat_after_ftst_enable;
     bool gpu_gap_after_ftst_enable;
     unsigned temperature_reads_after_enable;
+    double post_release_pause_seconds;
+    bool post_release_pause_applied;
+    double wait_scale;
     unsigned write_count;
     char writes[512];
     size_t writes_length;
@@ -181,7 +184,12 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
 
 static bool mock_wait(void *context, unsigned milliseconds) {
     MockBackend *mock = context;
-    mock->now += milliseconds / 1000.0;
+    mock->now += milliseconds / 1000.0 * (mock->wait_scale == 0.0 ? 1.0 : mock->wait_scale);
+    if (mock->released_ftst && !mock->post_release_pause_applied &&
+        mock->post_release_pause_seconds > 0.0) {
+        mock->now += mock->post_release_pause_seconds;
+        mock->post_release_pause_applied = true;
+    }
     if (mock->pending_manual_effect &&
         mock->now >= mock->manual_effect_delay_seconds) {
         mock->pending_manual_effect = false;
@@ -712,6 +720,25 @@ static void delayed_ftst_release_waits_for_readback_and_stable_window(void) {
     assert(mock.now >= 63.0);
 }
 
+static void ftst_restore_rejects_a_gap_after_release(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .reclaim_on_ftst_release = true,
+                        .post_release_pause_seconds = 21.0};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_restore_unlock(&backend));
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+}
+
+static void ftst_restore_requires_elapsed_time_after_release(void) {
+    MockBackend mock = {.modes = {0, 0}, .ftst = 1,
+                        .reclaim_on_ftst_release = true, .wait_scale = 0.99};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_restore_unlock(&backend));
+    assert(mock.now >= 60.0);
+    assert(strcmp(mock.writes, "Ftst=0;") == 0);
+}
+
 static void ftst_release_relatched_during_observation_is_not_verified(void) {
     MockBackend mock = {.modes = {0, 0}, .ftst = 1,
                         .targets = {1350, 1458}, .reclaim_on_ftst_release = true,
@@ -769,11 +796,15 @@ typedef struct {
     bool fail_read;
     bool fail_wait;
     bool stop_after_wait;
+    double now;
+    double wait_seconds;
+    double read_seconds;
 } FakeBaselineObserver;
 
 static bool fake_baseline_read(void *context, TrialObservation *output) {
     FakeBaselineObserver *fake = context;
     unsigned sample = fake->reads++;
+    fake->now += fake->read_seconds;
     if (fake->fail_read && sample == fake->fail_read_at) return false;
     output->mode[0] = 3;
     output->mode[1] = 3;
@@ -791,7 +822,12 @@ static bool fake_baseline_wait(void *context, unsigned milliseconds) {
     FakeBaselineObserver *fake = context;
     assert(milliseconds == 1000);
     ++fake->waits;
+    fake->now += fake->wait_seconds == 0.0 ? 1.0 : fake->wait_seconds;
     return !fake->fail_wait;
+}
+
+static double fake_baseline_now(void *context) {
+    return ((FakeBaselineObserver *)context)->now;
 }
 
 static bool fake_baseline_stopped(void *context) {
@@ -813,6 +849,7 @@ static TrialBaselineObserver baseline_backend_for(FakeBaselineObserver *fake) {
         .read_observation = fake_baseline_read,
         .wait_milliseconds = fake_baseline_wait,
         .should_stop = fake_baseline_stopped,
+        .monotonic_seconds = fake_baseline_now,
         .record_observation = fake_baseline_record,
     };
 }
@@ -856,6 +893,57 @@ static void baseline_window_stops_on_interruption_or_wait_failure(void) {
     result = trial_observe_baseline_window(&wait_failed_observer, 60);
     assert(result.status == TRIAL_BASELINE_WAIT_FAILED);
     assert(result.second == 0 && result.samples == 1);
+}
+
+static void baseline_window_rejects_a_gap_between_samples(void) {
+    FakeBaselineObserver fake = {.wait_seconds = 21.0};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_TIMING_FAILED);
+    assert(result.second == 1 && result.samples == 1 && fake.records == 1);
+}
+
+static void baseline_window_rejects_a_slow_first_read(void) {
+    FakeBaselineObserver fake = {.read_seconds = 6.0};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_TIMING_FAILED);
+    assert(result.samples == 0 && fake.reads == 1 && fake.records == 0);
+}
+
+static void baseline_window_rejects_short_or_reversed_intervals(void) {
+    const double intervals[] = {0.5, -1.0};
+    for (unsigned index = 0; index < sizeof(intervals) / sizeof(intervals[0]); ++index) {
+        FakeBaselineObserver fake = {.wait_seconds = intervals[index], .now = 10.0};
+        TrialBaselineObserver observer = baseline_backend_for(&fake);
+        TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+        assert(result.status == TRIAL_BASELINE_TIMING_FAILED);
+        assert(result.samples == 1 && fake.records == 1);
+    }
+}
+
+static void baseline_window_requires_elapsed_time_for_the_full_window(void) {
+    FakeBaselineObserver fake = {.wait_seconds = 0.99};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+    assert(result.status == TRIAL_BASELINE_TIMING_FAILED);
+    assert(result.samples == 61 && fake.records == 61 && fake.now < 60.0);
+}
+
+static void baseline_window_rejects_an_invalid_clock(void) {
+    const double times[] = {NAN, INFINITY, -1.0};
+    for (unsigned index = 0; index < sizeof(times) / sizeof(times[0]); ++index) {
+        FakeBaselineObserver fake = {.now = times[index]};
+        TrialBaselineObserver observer = baseline_backend_for(&fake);
+        TrialBaselineResult result = trial_observe_baseline_window(&observer, 60);
+        assert(result.status == TRIAL_BASELINE_TIMING_FAILED);
+        assert(fake.reads == 0 && result.samples == 0);
+    }
+    FakeBaselineObserver fake = {0};
+    TrialBaselineObserver observer = baseline_backend_for(&fake);
+    observer.monotonic_seconds = NULL;
+    assert(trial_observe_baseline_window(&observer, 60).status == TRIAL_BASELINE_INVALID);
+    assert(fake.reads == 0);
 }
 
 int main(void) {
@@ -903,6 +991,8 @@ int main(void) {
     ftst_preclear_stops_when_unlock_clears_between_targets();
     ftst_release_does_not_overwrite_a_system_owned_fan_target();
     delayed_ftst_release_waits_for_readback_and_stable_window();
+    ftst_restore_rejects_a_gap_after_release();
+    ftst_restore_requires_elapsed_time_after_release();
     ftst_release_relatched_during_observation_is_not_verified();
     ftst_unexpected_manual_mode_releases_fans_first();
     ftst_check_rejects_nonbaseline_before_first_write();
@@ -912,6 +1002,11 @@ int main(void) {
     baseline_window_catches_delayed_ftst_change();
     baseline_window_stops_on_read_failure();
     baseline_window_stops_on_interruption_or_wait_failure();
+    baseline_window_rejects_a_gap_between_samples();
+    baseline_window_rejects_a_slow_first_read();
+    baseline_window_rejects_short_or_reversed_intervals();
+    baseline_window_requires_elapsed_time_for_the_full_window();
+    baseline_window_rejects_an_invalid_clock();
     puts("trial action tests passed");
     return 0;
 }
