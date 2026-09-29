@@ -112,6 +112,12 @@ date: 2026-09-23
 
 [Открытый проект macfan](https://github.com/raminsharifi/MacFanControl) сообщает о работе через `AppleSMC`, ключах RPM и ручном режиме на `Mac15,7`. В его [`fan.rs`](https://github.com/raminsharifi/MacFanControl/blob/main/src/fan.rs) ключ режима ищется как `F{n}md`/`F{n}Md`, а RPM кодируется по фактически прочитанному типу `flt ` или `fpe2`; [`smc.rs`](https://github.com/raminsharifi/MacFanControl/blob/main/src/smc.rs) проверяет размер перед командой записи; [`control.rs`](https://github.com/raminsharifi/MacFanControl/blob/main/src/control.rs) сначала включает ручной режим, при отказе ограниченно использует `Ftst`, а при восстановлении обрабатывает все затронутые вентиляторы до очистки `Ftst`. [README проекта](https://github.com/raminsharifi/MacFanControl/blob/main/README.md) прямо отделяет cleanup обычного выхода от случаев `SIGKILL` и потери питания, где нужен внешний способ восстановления. Это свидетельство разработчика сторонней программы, **не** документация Apple и **не** результат нашего прототипа на macOS 27. Пример [Stats](https://github.com/exelban/stats/blob/master/SMC/Helper/main.swift) подтверждает существование схемы с helper, но его README помечает fan control как «not maintained». Конкретные имена ключей, кодировки значений и переключение режима проверять на устройстве, а не копировать как гарантированный контракт.
 
+### 1a. Внешний контроль worker, 2026-09-29
+
+| Факт | Где проверено | Следствие и границы |
+|---|---|---|
+| Изолированный C supervisor сохраняет журнал до `fork`, ограничивает каждый собственный процесс по `CLOCK_MONOTONIC_RAW`, требует его сбор до следующей фазы и перед очисткой проверяет новое полное окно в родителе. | `prototype/helper-ipc/WorkerSupervisor.c`, `prototype/helper-ipc/WorkerSupervisorTest.c`; [сценарии](../features/worker-supervisor.md), тесты пользовательских процессов на `Mac15,7`/macOS 27.0. | Это внешний процесс относительно подставного worker. В живой XPC daemon он не входит, аппаратные callbacks не подключены. `SIGSTOP` не моделирует зависание ядра; смерть самого supervisor не покрыта автоматическим восстановлением. Новая запись и завершение M2 этим не разрешаются. |
+
 ## 2. Решения на текущем этапе
 
 | Решение | Причина и отклонённая альтернатива | Цена / проверка |

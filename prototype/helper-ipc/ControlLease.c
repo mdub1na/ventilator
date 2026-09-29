@@ -47,7 +47,8 @@ void control_lease_sample(ControlLease *lease, SmcBaselineResult result,
         (lease->state != CONTROL_LEASE_OBSERVING &&
          lease->state != CONTROL_LEASE_VERIFYING_RECOVERY)) return;
     if (!valid_read(result, snapshot) || now_ns <= lease->last_sample_ns ||
-        now_ns - lease->last_sample_ns < CONTROL_LEASE_SAMPLE_MIN_NS) {
+        now_ns - lease->last_sample_ns < CONTROL_LEASE_SAMPLE_MIN_NS ||
+        now_ns - lease->last_sample_ns > CONTROL_LEASE_SAMPLE_MAX_NS) {
         lease->state = CONTROL_LEASE_READ_FAILED;
         return;
     }
