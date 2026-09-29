@@ -1,5 +1,7 @@
 #include "WorkerSupervisor.h"
 #include "SupervisorOwnership.h"
+#include "SupervisorProbeCrash.h"
+#include "SupervisorProbeStorage.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -7,6 +9,7 @@
 #include <libproc.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <sys/mman.h>
 #include <sys/proc.h>
 #include <sys/stat.h>
@@ -17,7 +20,7 @@
 static const uint64_t SECOND = UINT64_C(1000000000);
 
 typedef enum { EXIT_OK, EXIT_FAILED, CRASH, STOPPED, CANCEL, BUSY } Action;
-typedef enum { BASELINE, CHANGED, READ_FAILED, READ_CRASH, SLOW_READ, READ_STOPPED, READ_BUSY } Reading;
+typedef enum { BASELINE, CHANGED, READ_FAILED, READ_CRASH, SLOW_READ, READ_STOPPED, READ_BUSY, DIAGNOSTIC_CRASH } Reading;
 
 typedef struct {
     char directory[128];
@@ -93,6 +96,10 @@ static SmcBaselineResult read_snapshot(void *context, SmcBaselineSnapshot *snaps
     Fixture *fixture = context;
     fixture->reader_pid = getpid();
     ++fixture->reads;
+    if (fixture->reading == DIAGNOSTIC_CRASH) {
+        alarm(10);
+        for (;;) pause();
+    }
     if (fixture->reading == READ_CRASH) (void)raise(SIGKILL);
     if (fixture->reading == READ_STOPPED) (void)run_action(STOPPED);
     if (fixture->reading == READ_BUSY) (void)run_action(BUSY);
@@ -301,6 +308,15 @@ static void wait_for_absence(pid_t child) {
     }
 }
 
+static void diagnostic_observer_started(void *context, pid_t observer, bool recovering) {
+    Fixture *fixture = context;
+    if (!recovering || fixture->reading != DIAGNOSTIC_CRASH) return;
+    fixture->reader_pid = observer;
+    int dir = open(fixture->directory, O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW);
+    (void)supervisor_probe_crash_after_observer_start(dir, observer);
+    if (dir >= 0) (void)close(dir);
+}
+
 static pid_t start_owner(int dir, Fixture *fixture) {
     pid_t owner = fork();
     assert(owner >= 0);
@@ -311,6 +327,7 @@ static pid_t start_owner(int dir, Fixture *fixture) {
         bound.recovery_ns = 10 * SECOND;
         WorkerSupervisorBackend backend = {
             .context = fixture, .operate = operate, .recover = recover, .read = read_snapshot,
+            .observer_started = diagnostic_observer_started,
         };
         (void)worker_supervisor_run(dir, &lease, backend, bound, NULL);
         _exit(1); // The test must kill the owner while its phase is still active.
@@ -419,6 +436,42 @@ static void stopped_or_recorded_live_worker_blocks_a_new_owner(void) {
     fixture_free(fixture, dir);
 }
 
+static void diagnostic_crash_keeps_intent_and_restart_never_repeats_operation(void) {
+    int dir;
+    Fixture *fixture = fixture_new(&dir);
+    // Refuse invalid context and a foreign process without signalling either.
+    assert(!supervisor_probe_crash_after_observer_start(dir, 0));
+    assert(!supervisor_probe_crash_after_observer_start(dir, getpid()));
+    assert(!supervisor_probe_crash_after_observer_start(dir, getppid()));
+    fixture->reading = DIAGNOSTIC_CRASH;
+    pid_t owner = start_owner(dir, fixture);
+    wait_for_pid(&fixture->reader_pid);
+    uint64_t started = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    int status = 0;
+    for (;;) {
+        pid_t exited = waitpid(owner, &status, WNOHANG);
+        if (exited == owner) break;
+        assert(exited == 0 || (exited < 0 && errno == EINTR));
+        assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - started < 2 * SECOND);
+        struct timespec delay = {.tv_nsec = 10000000};
+        (void)nanosleep(&delay, NULL);
+    }
+    assert(WIFSIGNALED(status) && WTERMSIG(status) == SIGKILL);
+    wait_for_absence(fixture->reader_pid);
+    assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - started < 2 * SECOND);
+    assert(control_intent_read(dir) == CONTROL_INTENT_PENDING);
+    assert(!supervisor_probe_cleanup(dir));
+    fixture->reading = CHANGED;
+    ControlLease lease = held_lease();
+    lease.recovery_verified = true;
+    WorkerSupervisorReport report = resume_when_available(dir, &lease, fixture);
+    assert(report.operation_pid == 0 && report.operation == WORKER_NOT_STARTED);
+    assert(report.result == SUPERVISOR_OBSERVATION_FAILED && report.reaped == 2);
+    assert(fixture->operations == 1 && fixture->recoveries == 2);
+    assert(!lease.recovery_verified && control_intent_read(dir) == CONTROL_INTENT_PENDING);
+    fixture_free(fixture, dir);
+}
+
 static void missing_or_malformed_worker_record_never_allows_restart(void) {
     int dir;
     Fixture *fixture = fixture_new(&dir);
@@ -499,6 +552,11 @@ static void initial_baseline_is_bounded_and_never_recovery_proof(bool full) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--owner-loss-only") == 0) {
+        diagnostic_crash_keeps_intent_and_restart_never_repeats_operation();
+        puts("diagnostic owner loss tests passed");
+        return 0;
+    }
     (void)argv;
     // Fast-only mode also supports focused mutation checks without a minute wait.
     if (argc == 1) {
@@ -511,6 +569,7 @@ int main(int argc, char **argv) {
     failed_crashed_or_slow_reader_never_clears_intent();
     pending_stale_or_unreapable_admission_never_forks();
     owner_crash_stops_each_phase_and_restart_uses_a_fresh_window(argc == 1);
+    diagnostic_crash_keeps_intent_and_restart_never_repeats_operation();
     stopped_or_recorded_live_worker_blocks_a_new_owner();
     missing_or_malformed_worker_record_never_allows_restart();
     unsafe_ownership_files_never_allow_a_callback();

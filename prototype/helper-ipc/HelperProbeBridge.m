@@ -95,6 +95,8 @@ typedef enum {
     DaemonRequestWatchStatus,
     DaemonRequestStartupAudit,
     DaemonRequestSupervisorStart,
+    DaemonRequestSupervisorCrashStart,
+    DaemonRequestSupervisorResume,
     DaemonRequestSupervisorStatus,
     DaemonRequestSupervisorCleanup,
 } DaemonRequest;
@@ -132,6 +134,8 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
         case DaemonRequestWatchStatus: [remote fetchBaselineWatchWithReply:complete]; break;
         case DaemonRequestStartupAudit: [remote fetchStartupAuditWithReply:complete]; break;
         case DaemonRequestSupervisorStart: [remote startSupervisorProbeWithReply:complete]; break;
+        case DaemonRequestSupervisorCrashStart: [remote startSupervisorCrashProbeWithReply:complete]; break;
+        case DaemonRequestSupervisorResume: [remote resumeSupervisorProbeWithReply:complete]; break;
         case DaemonRequestSupervisorStatus: [remote fetchSupervisorProbeWithReply:complete]; break;
         case DaemonRequestSupervisorCleanup: [remote cleanupSupervisorProbeWithReply:complete]; break;
     }
@@ -254,6 +258,14 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_start
 JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_supervisorStatusNative(JNIEnv *environment, jobject self) {
     (void)self;
     @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorStatus); }
+}
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_startSupervisorCrashNative(JNIEnv *environment, jobject self) {
+    (void)self;
+    @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorCrashStart); }
+}
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_resumeSupervisorNative(JNIEnv *environment, jobject self) {
+    (void)self;
+    @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorResume); }
 }
 JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_cleanupSupervisorNative(JNIEnv *environment, jobject self) {
     (void)self;

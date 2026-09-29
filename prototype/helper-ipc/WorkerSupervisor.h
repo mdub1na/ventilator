@@ -22,6 +22,9 @@ typedef struct {
     int (*operate)(void *context);
     int (*recover)(void *context);
     SmcBaselineResult (*read)(void *context, SmcBaselineSnapshot *snapshot);
+    // Optional fixed diagnostic in the parent after a durable child grant.
+    // Must not spawn/reap children or perform hardware operations.
+    void (*observer_started)(void *context, pid_t observer, bool recovering);
 } WorkerSupervisorBackend;
 
 typedef enum {

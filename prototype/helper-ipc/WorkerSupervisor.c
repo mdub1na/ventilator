@@ -272,6 +272,8 @@ static bool observe_owned(
         observe_child(channel[1], backend);
     }
     (void)close(channel[1]);
+    if (connection >= 0 && report->observer_pid > 0 && backend.observer_started != NULL)
+        backend.observer_started(backend.context, report->observer_pid, recovering);
     bool verified = report->observer_pid > 0 &&
         supervise_observer(channel[0], report->observer_pid, lease,
                             launched_ns, deadline, limits.reap_ns, report, recovering, latest);

@@ -2,6 +2,7 @@
 #include "WorkerSupervisor.h"
 #include "SupervisorProbeStorage.h"
 #include "SupervisorProbeDirectory.h"
+#include "SupervisorProbeCrash.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -12,15 +13,33 @@
 
 static const uint64_t SECOND = UINT64_C(1000000000);
 
+typedef struct {
+    int directory;
+    bool crash_observer;
+} ProbeContext;
+
 static SmcBaselineResult read_baseline(void *context, SmcBaselineSnapshot *snapshot) {
-    (void)context;
+    ProbeContext *probe = context;
+    if (probe->crash_observer) {
+        // The ordinary ownership monitor should exit this worker immediately
+        // on parent EOF. A broken monitor still has a diagnostic failure bound.
+        alarm(10);
+        for (;;) pause();
+    }
     return smc_baseline_read(snapshot);
 }
 
 static int check_only(void *context) {
+    (void)context;
     SmcBaselineSnapshot snapshot = {0};
-    return read_baseline(context, &snapshot) == SMC_BASELINE_OK &&
+    return smc_baseline_read(&snapshot) == SMC_BASELINE_OK &&
            smc_baseline_is_system(&snapshot) ? 0 : 1;
+}
+
+static void observer_started(void *context, pid_t observer, bool recovering) {
+    ProbeContext *probe = context;
+    if (recovering && probe->crash_observer)
+        (void)supervisor_probe_crash_after_observer_start(probe->directory, observer);
 }
 
 static uint64_t window_ns(const ControlLease *lease) {
@@ -31,8 +50,10 @@ static uint64_t window_ns(const ControlLease *lease) {
 int main(int argc, char **argv) {
     // This executable is not a fan writer. No environment flag can enable one.
     bool cleanup = argc == 2 && strcmp(argv[1], "--cleanup") == 0;
-    if (getuid() != 0 || geteuid() != 0 || (argc != 1 && !cleanup)) {
-        fputs("root read-only probe accepts only no arguments or --cleanup\n", stderr);
+    bool crash = argc == 2 && strcmp(argv[1], "--crash-observer") == 0;
+    bool resume_only = argc == 2 && strcmp(argv[1], "--resume-pending") == 0;
+    if (getuid() != 0 || geteuid() != 0 || (argc != 1 && !cleanup && !crash && !resume_only)) {
+        fputs("root read-only probe accepts only fixed diagnostic modes\n", stderr);
         return 2;
     }
     umask(0077);
@@ -52,7 +73,9 @@ int main(int argc, char **argv) {
         return clean ? 0 : 2;
     }
 
-    WorkerSupervisorBackend backend = {.operate = check_only, .recover = check_only, .read = read_baseline};
+    ProbeContext context = {.directory = directory};
+    WorkerSupervisorBackend backend = {.context = &context, .operate = check_only, .recover = check_only,
+                                        .read = read_baseline, .observer_started = observer_started};
     WorkerSupervisorLimits limits = {.operation_ns = 5 * SECOND, .recovery_ns = 5 * SECOND,
                                      .observation_ns = 75 * SECOND, .reap_ns = 2 * SECOND};
     ControlLease lease = {0};
@@ -61,11 +84,11 @@ int main(int argc, char **argv) {
     unsigned admission_samples = 0;
     ControlIntentStatus intent = control_intent_read(directory);
     bool resumed = intent == CONTROL_INTENT_PENDING;
-    if (resumed) {
+    if (resumed && !crash) {
         // With this read-only backend, recovery merely checks system mode.
         // A changed SMC baseline remains pending; no restore command is issued.
         report = worker_supervisor_resume(directory, &lease, backend, limits);
-    } else if (intent == CONTROL_INTENT_CLEAR) {
+    } else if (intent == CONTROL_INTENT_CLEAR && !resume_only) {
         SmcBaselineSnapshot latest = {0};
         admission = worker_supervisor_observe_baseline(directory, &lease, &latest, backend, limits);
         admission_samples = lease.samples;
@@ -75,6 +98,7 @@ int main(int argc, char **argv) {
         if (admission.result == SUPERVISOR_BASELINE_READY &&
             control_lease_claim(&lease, (uint64_t)getpid(), clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW),
                 true, control_intent_read(directory), SMC_BASELINE_OK, &latest)) {
+            context.crash_observer = crash;
             report = worker_supervisor_run(directory, &lease, backend, limits, NULL);
         }
     }

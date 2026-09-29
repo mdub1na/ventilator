@@ -51,6 +51,14 @@ object HelperProbeCommand {
                     println(native.supervisorStatusNative())
                     0
                 }
+                "--helper-supervisor-crash-start" -> {
+                    println(native.startSupervisorCrashNative())
+                    0
+                }
+                "--helper-supervisor-resume" -> {
+                    println(native.resumeSupervisorNative())
+                    0
+                }
                 "--helper-supervisor-cleanup" -> {
                     println(native.cleanupSupervisorNative())
                     0
@@ -83,6 +91,8 @@ internal class HelperProbeNative(path: Path) {
     external fun watchStatusNative(): String
     external fun startupAuditNative(): String
     external fun startSupervisorNative(): String
+    external fun startSupervisorCrashNative(): String
+    external fun resumeSupervisorNative(): String
     external fun supervisorStatusNative(): String
     external fun cleanupSupervisorNative(): String
 }

@@ -19,6 +19,8 @@ class ProcessPathTest(unittest.TestCase):
         )
         self.assertEqual(1, result.returncode)
         self.assertEqual("", result.stdout)
+        absent = subprocess.run([str(HELPER), "process-absent", str(child.pid)], timeout=5)
+        self.assertEqual(0, absent.returncode)
 
     def test_spoofed_runner_argv_does_not_pass_as_the_executable(self):
         with subprocess.Popen([RUNNER, "15"], executable="/bin/sleep") as child:
@@ -29,19 +31,22 @@ class ProcessPathTest(unittest.TestCase):
                 )
                 self.assertEqual("/bin/sleep", result.stdout.strip())
                 self.assertNotEqual(RUNNER, result.stdout.strip())
+                absent = subprocess.run([str(HELPER), "process-absent", str(child.pid)], timeout=5)
+                self.assertEqual(1, absent.returncode)
             finally:
                 child.terminate()
                 child.wait(timeout=5)
 
     def test_invalid_pid_is_rejected(self):
-        for pid in ("", "0", "-1", "1x", "2147483648"):
-            with self.subTest(pid=pid):
-                result = subprocess.run(
-                    [str(HELPER), "process-path", pid],
-                    capture_output=True, text=True, timeout=5,
-                )
-                self.assertEqual(2, result.returncode)
-                self.assertEqual("", result.stdout)
+        for mode in ("process-path", "process-absent"):
+            for pid in ("", "0", "-1", "1x", "2147483648"):
+                with self.subTest(mode=mode, pid=pid):
+                    result = subprocess.run(
+                        [str(HELPER), mode, pid],
+                        capture_output=True, text=True, timeout=5,
+                    )
+                    self.assertEqual(2, result.returncode)
+                    self.assertEqual("", result.stdout)
 
 
 if __name__ == "__main__":
