@@ -26,8 +26,7 @@ test: smc-write-trial trial-logic-test trial-actions-test
 	done
 	@output=$$(./smc-write-trial ftst-check --apply-reviewed --confirm FTST-REVIEWED-Mac15,7-27.0 2>&1); status=$$?; \
 		test $$status -eq 2 && test "$$output" = 'reviewed Ftst trial completed; further hardware trials suspended before SMC access'
-	@output=$$(./smc-write-trial ftst-minimum --apply-reviewed --confirm FTST-MINIMUM-Mac15,7-27.0 2>&1); status=$$?; \
-		test $$status -eq 2 && test "$$output" = 'ftst-minimum requires its supervised wrapper; no SMC access attempted'
+	bash ./ftst-minimum-suspended-test.sh
 
 clean:
 	rm -f smc-write-trial trial-logic-test trial-actions-test

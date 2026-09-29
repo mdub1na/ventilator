@@ -1225,12 +1225,10 @@ static void usage(const char *program) {
             "  %s ftst-minimum --dry-run\n"
             "  %s restore-unlock --dry-run\n"
             "  %s observe-baseline --read-only\n"
-            "  sudo %s ftst-minimum --apply-reviewed --confirm FTST-MINIMUM-Mac15,7-27.0\n"
             "  sudo %s restore --apply --confirm RESTORE-Mac15,7-27.0\n"
             "  sudo %s restore-unlock --apply --confirm RESTORE-UNLOCK-Mac15,7-27.0\n"
-            "Run the reviewed minimum-target check only through ftst-minimum-supervised.sh. "
-            "Legacy Ftst and direct hardware trials remain suspended.\n",
-            program, program, program, program, program, program, program,
+            "All Ftst and direct hardware trials remain suspended.\n",
+            program, program, program, program, program, program,
             program, program);
 }
 
@@ -1278,10 +1276,8 @@ int main(int argc, char **argv) {
               stderr);
         return TRIAL_EXIT_NO_WRITE;
     }
-    const char *minimum_supervised = getenv("VENTILATOR_MINIMUM_SUPERVISED");
-    if (minimum_reviewed &&
-        (minimum_supervised == NULL || strcmp(minimum_supervised, "1") != 0)) {
-        fputs("ftst-minimum requires its supervised wrapper; no SMC access attempted\n",
+    if (minimum_reviewed) {
+        fputs("reviewed minimum-target trial completed; further hardware trials suspended before SMC access\n",
               stderr);
         return TRIAL_EXIT_NO_WRITE;
     }
