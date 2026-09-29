@@ -40,6 +40,8 @@ typedef struct {
     bool stop_after_unlock;
     bool high_temperature;
     bool heat_after_ftst_enable;
+    bool gpu_gap_after_ftst_enable;
+    unsigned temperature_reads_after_enable;
     unsigned write_count;
     char writes[512];
     size_t writes_length;
@@ -160,6 +162,10 @@ static bool mock_read(void *context, bool temperatures, TrialObservation *output
         output->temperatures_c[0] = mock->high_temperature ? 75.0 : 55.0;
         output->temperatures_c[1] = 50.0;
         output->temperatures_c[2] = 35.0;
+        if (mock->gpu_gap_after_ftst_enable && mock->ftst == 1 &&
+            ++mock->temperature_reads_after_enable >= 2) {
+            output->temperatures_c[1] = -1.95;
+        }
     }
     output->metrics_available = temperatures;
     if (mock->transient_baseline_on_second_ftst_read && mock->ftst == 1 &&
@@ -397,6 +403,18 @@ static void ftst_minimum_recovery_rejects_hot_baseline_without_write(void) {
     assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) ==
            TRIAL_RUN_BASELINE_REJECTED);
     assert(mock.write_count == 0);
+}
+
+static void ftst_minimum_recovery_unavailable_gpu_restores_early(void) {
+    MockBackend mock = {.modes = {3, 3}, .gpu_gap_after_ftst_enable = true};
+    TrialBackend backend = backend_for(&mock);
+    const double minimum[TRIAL_FAN_COUNT] = {1350, 1458};
+    assert(trial_rehearse_ftst_minimum_recovery(&backend, minimum) ==
+           TRIAL_RUN_CONTROL_FAILED_SYSTEM_VERIFIED);
+    assert(mock.released_ftst && mock.ftst_zero_at < 5.0);
+    assert(strcmp(mock.writes, "Ftst=1;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.targets[0] == 0 && mock.targets[1] == 0);
 }
 
 static void transient_baseline_during_restore_does_not_verify_ftst(void) {
@@ -856,6 +874,7 @@ int main(void) {
     ftst_minimum_recovery_rejects_unexpected_targets();
     ftst_minimum_recovery_hot_reading_restores_early();
     ftst_minimum_recovery_rejects_hot_baseline_without_write();
+    ftst_minimum_recovery_unavailable_gpu_restores_early();
     transient_baseline_during_restore_does_not_verify_ftst();
     ftst_rejection_sends_release_and_observes();
     failed_ftst_write_with_delayed_effect_still_recovers();
