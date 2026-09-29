@@ -2,11 +2,11 @@
 
 ## Isolated worker supervisor (no hardware backend)
 
-`make worker-supervisor-test` runs a single-threaded parent with three distinct child phases: operation, recovery, and baseline reading. The parent persists intent before the first fork, bounds each phase with the raw monotonic clock, kills and reaps its own stalled children, and validates a fresh 61-sample, 60-second window before clearing intent. Tests use fake hardware only and require no sudo, daemon registration or SMC access. The full suite takes about a minute; `./WorkerSupervisorTest --fast` runs failure cases only.
+`make worker-supervisor-test` runs a single-threaded parent with three distinct child phases: operation, recovery, and baseline reading. The parent persists intent before the first fork, bounds each phase with the raw monotonic clock, kills and reaps its own stalled children, and validates a fresh 61-sample, 60-second window before clearing intent. Tests use fake hardware only and require no sudo, daemon registration or SMC access. The full suite includes three real minute windows; `./WorkerSupervisorTest --fast` runs failure cases only.
 
-This module is not linked into the current XPC daemon or writer CLI. It requires default SIGCHLD handling, no other child reaper and callbacks that do not spawn descendants. Direct fork callbacks are unsuitable for the current multithreaded daemon. A failed reap retains intent and prevents the next phase; real IOKit stalls, owner death, restart and hardware recovery remain unverified. See [the protocol](../../docs/features/worker-supervisor.md).
+This module is linked into a separate signed read-only runner launched by the XPC daemon, and is not linked into the daemon or writer CLI itself. It requires default SIGCHLD handling, no other child reaper and callbacks that do not spawn descendants. Direct fork callbacks are unsuitable for the current multithreaded daemon. A failed reap retains intent and prevents the next phase; real IOKit stalls and hardware recovery remain unverified. See [the protocol](../../docs/features/worker-supervisor.md).
 
-The isolated supervisor now persists a child PID before granting execution over a private socket. A separate child thread exits its entire worker on parent EOF. An inherited exclusive lock and a check of the persisted PID prevent recovery while an old worker remains; recorded PIDs are never signalled, so reuse fails closed. `worker_supervisor_resume` performs recovery and a new minute only, dropping old lease memory. It rejects missing/corrupt records and unsafe files. Tests kill their own supervisor in all three phases; a stopped worker remains blocked until the test explicitly resumes its known descendant. The full suite now includes two real minute windows (about 2–3 minutes). This is still a user-process harness with fake hardware, outside the signed XPC daemon.
+The isolated supervisor now persists a child PID before granting execution over a private socket. A separate child thread exits its entire worker on parent EOF. An inherited exclusive lock and a check of the persisted PID prevent recovery while an old worker remains; recorded PIDs are never signalled, so reuse fails closed. `worker_supervisor_resume` performs recovery and a new minute only, dropping old lease memory. It rejects missing/corrupt records and unsafe files. Tests kill their own supervisor in all three phases; a stopped worker remains blocked until the test explicitly resumes its known descendant. `./WorkerSupervisorTest --owner-loss-only` checks the new diagnostic self-termination, retained intent, refused cleanup and recovery-only restart with fake hardware. The signed root path is tested separately below.
 
 ## XPC probes
 
@@ -91,7 +91,7 @@ The separate root in-flight probe passed on Mac15,7/macOS 27.0. The request rema
 
 `make supervisor-probe-test` checks strict result validation, exclusive private storage and the runner's refusal of an unprivileged invocation. `sh supervisor-signature-smoke.sh` additionally requires a locally valid Apple Development identity: the same daemon's signature-only diagnostic accepts its signed sibling and rejects a different identifier, ad hoc signing, tampering and absence. It does not launch a task or access SMC.
 
-The local `helper-status process-path PID` diagnostic reads the full executable path through macOS `proc_pidpath`. `supervisor-start` requires this fixed root path and a separate UID 0 check: `ps comm` can truncate long names, and argv can name a different executable. `process-path-test.py` checks a spoofed runner argv and invalid PIDs without privileges, service registration or SMC access.
+The local `helper-status process-path PID` diagnostic reads the full executable path through macOS `proc_pidpath`. `supervisor-start` requires this fixed root path and a separate UID 0 check: `ps comm` can truncate long names, and argv can name a different executable. `process-absent PID` succeeds only on `proc_pidinfo` returning `ESRCH`; live, uncertain and zombie results fail. `process-path-test.py` checks a spoofed runner argv, absence and invalid PIDs without privileges, service registration or SMC access. Neither command sends a signal.
 
 `integrated-probe.sh prepare` now includes the separately signed `supervisor-probe` executable. After registration and background approval, run:
 
@@ -101,6 +101,16 @@ The local `helper-status process-path PID` diagnostic reads the full executable 
 ```
 
 Start returns immediately. The signed root runner reads 61 baseline samples over at least a minute, runs separate check-only operation/recovery processes, then requires another complete minute of independently supervised reads. Poll status after about two minutes. `finished` alone is not success: inspect `report.state`, which must be `verified`; it also reports the real windows, root UID, collected PIDs and clear journal. Temperature admission still requires the existing thresholds; an unavailable or hot final sensor can produce `blocked` without a pending operation. There are **no SMC writes**, and `write_available` stays false. A pending journal selects recovery-only observation on a new runner, never another operation.
+
+For the separate owner-loss diagnostic, start with no prior root probe state and run:
+
+```sh
+./integrated-probe.sh supervisor-crash-run "$APP"
+```
+
+The driver first requires explicit `--helper-supervisor-resume` on clean state to return `blocked` with no child phases. After cleanup it starts fixed `--helper-supervisor-crash-start`: following baseline admission and check-only operation/recovery, the runner raises `SIGKILL` in itself after granting its observer. The observer's ownership thread must exit the process on parent EOF. A diagnostic 10-second alarm bounds a broken thread but cannot satisfy the two-second interruption contract. The daemon requires actual signal termination and a fresh marker from its own root runner; the client requires `interrupted` and kernel-confirmed absence of runner and observer.
+
+The same driver requires pending cleanup to fail without deleting state, then starts `--helper-supervisor-resume`. The new runner must report `resumed=true`, zero admission/operation metrics, two reaped children and 61 new recovery samples spanning at least a minute before clearing intent. No caller supplies a PID, signal, path or SMC key. These are diagnostic commands, and ordinary UI never invokes them. At this stage local process/contract tests passed; this new signed root diagnostic still awaits execution. If it fails, preserve the package and journal; do not bypass them by deleting files.
 
 Before removing the temporary registration or package, run:
 

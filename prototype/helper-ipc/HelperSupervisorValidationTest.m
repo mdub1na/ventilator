@@ -45,11 +45,61 @@ static void xpc_write_or_mismatched_runner_is_rejected(void) {
     NSCAssert(!HelperSupervisorResponseValid(response), @"another backend must fail");
 }
 
+static void interrupted_requires_bounded_root_evidence(void) {
+    NSMutableDictionary *marker = [@{@"runner_pid": @100, @"runner_uid": @0, @"observer_pid": @104,
+        @"journal_pending": @YES, @"armed_monotonic_ns": @1000000000ULL} mutableCopy];
+    NSCAssert(HelperSupervisorCrashMarkerValid(marker, 100, 1000000001ULL), @"valid crash marker");
+    NSCAssert(!HelperSupervisorCrashMarkerValid(marker, 101, 1000000001ULL), @"other runner");
+    NSCAssert(!HelperSupervisorCrashMarkerValid(marker, 100, 999999999ULL), @"future marker");
+    NSCAssert(!HelperSupervisorCrashMarkerValid(marker, 100, 3000000001ULL), @"late fallback EOF");
+    NSDictionary *invalid = @{@"runner_uid": @501, @"runner_pid": @YES, @"observer_pid": @100,
+        @"journal_pending": @NO, @"armed_monotonic_ns": @0};
+    for (NSString *key in invalid) {
+        NSMutableDictionary *bad = [marker mutableCopy];
+        bad[key] = invalid[key];
+        NSCAssert(!HelperSupervisorCrashMarkerValid(bad, 100, 1000000001ULL), @"bad marker %@", key);
+    }
+    NSMutableDictionary *response = [@{@"protocol_version": @(HelperStatusProtocolVersion),
+        @"backend": @"read_only", @"write_available": @NO, @"daemon_pid": @99, @"runner_pid": @100,
+        @"state": @"interrupted", @"crash": @{@"observer_pid": @104, @"journal_pending": @YES,
+                                               @"loss_duration_ns": @1000000}} mutableCopy];
+    NSCAssert(HelperSupervisorResponseValid(response), @"bounded interrupted status");
+    for (NSDictionary *bad in @[@{@"observer_pid": @100, @"journal_pending": @YES, @"loss_duration_ns": @1},
+                                @{@"observer_pid": @99, @"journal_pending": @YES, @"loss_duration_ns": @1},
+                                @{@"observer_pid": @104, @"journal_pending": @NO, @"loss_duration_ns": @1},
+                                @{@"observer_pid": @104, @"journal_pending": @YES, @"loss_duration_ns": @2000000001ULL},
+                                @{@"observer_pid": @104, @"journal_pending": @YES, @"loss_duration_ns": @YES}]) {
+        response[@"crash"] = bad;
+        NSCAssert(!HelperSupervisorResponseValid(response), @"invalid interruption evidence");
+    }
+    response[@"state"] = @"running";
+    NSCAssert(!HelperSupervisorResponseValid(response), @"running cannot carry old crash evidence");
+}
+
+static void resume_requires_a_new_minute_and_no_repeated_operation(void) {
+    NSMutableDictionary *report = verifiedReport();
+    report[@"resumed"] = @YES;
+    report[@"admission_pid"] = @0;
+    report[@"admission_samples"] = @0;
+    report[@"admission_duration_ns"] = @0;
+    report[@"operation_pid"] = @0;
+    report[@"reaped"] = @2;
+    NSCAssert(HelperSupervisorReportValid(report), @"valid recovery-only report");
+    for (NSString *key in @[@"operation_pid", @"admission_pid", @"admission_samples", @"admission_duration_ns"]) {
+        NSMutableDictionary *bad = [report mutableCopy]; bad[key] = @1;
+        NSCAssert(!HelperSupervisorReportValid(bad), @"resume must not repeat %@", key);
+    }
+    report[@"recovery_duration_ns"] = @59999999999ULL;
+    NSCAssert(!HelperSupervisorReportValid(report), @"resume needs its own full minute");
+}
+
 int main(void) {
     @autoreleasepool {
         NSCAssert(HelperSupervisorReportValid(verifiedReport()), @"valid pair of minutes must pass");
         false_success_is_rejected();
         xpc_write_or_mismatched_runner_is_rejected();
+        interrupted_requires_bounded_root_evidence();
+        resume_requires_a_new_minute_and_no_repeated_operation();
         puts("read-only supervisor contract tests passed");
     }
 }

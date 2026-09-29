@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-crash-start APP | supervisor-resume APP | supervisor-crash-run APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -55,6 +55,28 @@ boot_epoch() {
 
 is_uint() {
     case "$1" in ''|*[!0-9]*) return 1 ;; *) return 0 ;; esac
+}
+
+supervisor_terminal() {
+    attempt=0
+    while [ "$attempt" -lt 45 ]; do
+        status=$(ventilator --helper-supervisor-status)
+        case "$status" in *'"state":"running"'*) ;; *) return 0 ;; esac
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+    echo "supervisor did not finish; retain the registered package and journal" >&2
+    return 1
+}
+
+supervisor_identity() {
+    pid=$(printf '%s\n' "$1" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
+    is_uint "$pid" && [ "$pid" -gt 0 ] || { echo "runner PID missing" >&2; return 1; }
+    [ "$(ps -p "$pid" -o uid= | tr -d ' ')" = 0 ] || { echo "runner is not UID 0" >&2; return 1; }
+    [ "$(./helper-status process-path "$pid")" = /private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1 ] || {
+        echo "runner path differs or is unavailable" >&2; return 1;
+    }
+    echo "supervisor-process=verified uid=0 pid=$pid"
 }
 
 valid_identity() {
@@ -205,18 +227,76 @@ case "$action" in
         running_root_pid >/dev/null || { echo "system daemon is not running as root" >&2; exit 1; }
         echo "system-service=present uid=0"
         ;;
-    supervisor-start)
+    supervisor-start|supervisor-crash-start|supervisor-resume)
         require_app "$@"
         make helper-status
         [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
-        status=$(ventilator --helper-supervisor-start)
-        echo "supervisor-start=$status"
+        case "$action" in
+            supervisor-start) command=--helper-supervisor-start ;;
+            supervisor-crash-start) command=--helper-supervisor-crash-start ;;
+            supervisor-resume) command=--helper-supervisor-resume ;;
+        esac
+        status=$(ventilator "$command")
+        echo "$action=$status"
         case "$status" in *'"state":"running"'*) ;; *) echo "supervisor did not start" >&2; exit 1 ;; esac
-        pid=$(printf '%s\n' "$status" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
-        is_uint "$pid" && [ "$pid" -gt 0 ] || { echo "runner PID missing" >&2; exit 1; }
-        [ "$(ps -p "$pid" -o uid= | tr -d ' ')" = 0 ] || { echo "runner is not UID 0" >&2; exit 1; }
-        [ "$(./helper-status process-path "$pid")" = /private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1 ] || { echo "runner path differs or is unavailable" >&2; exit 1; }
-        echo "supervisor-process=verified uid=0 pid=$pid"
+        supervisor_identity "$status"
+        ;;
+    supervisor-crash-run)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        [ ! -e /private/var/db/com.ventilator.supervisor-read-only ] || {
+            echo "crash diagnostic requires absent prior probe state" >&2; exit 1;
+        }
+        make helper-status
+        # Verify the new explicit resume cannot start an operation on clean state.
+        status=$(ventilator --helper-supervisor-resume)
+        supervisor_terminal
+        echo "clean-resume=$status"
+        python3 -I - "$status" <<'PY'
+import json, sys
+s = json.loads(sys.argv[1]); r = s.get('report', {})
+assert s['state'] == 'finished' and r['state'] == 'blocked'
+assert r['journal_clear'] is True and r['resumed'] is False
+assert r['operation_pid'] == r['admission_pid'] == r['recovery_pid'] == r['observer_pid'] == r['reaped'] == 0
+PY
+        "$0" supervisor-cleanup "$app"
+        "$0" supervisor-crash-start "$app"
+        supervisor_terminal
+        echo "supervisor-interrupted=$status"
+        ids=$(python3 -I - "$status" <<'PY'
+import json, sys
+s = json.loads(sys.argv[1])
+assert s['state'] == 'interrupted' and s['crash']['journal_pending'] is True
+assert s['write_available'] is False and s['crash']['loss_duration_ns'] <= 2_000_000_000
+print(s['runner_pid'], s['crash']['observer_pid'])
+PY
+        )
+        set -- $ids
+        old_runner=$1; old_observer=$2
+        ./helper-status process-absent "$old_runner" && ./helper-status process-absent "$old_observer" || {
+            echo "old runner or observer remains; recovery blocked" >&2; exit 1;
+        }
+        echo "old-probe-processes=absent runner=$old_runner observer=$old_observer"
+        # A pending marker must not be deleted even after the old processes exit.
+        status=$(ventilator --helper-supervisor-cleanup)
+        supervisor_terminal
+        echo "pending-cleanup=$status"
+        case "$status" in *'"reason":"exit"'*'"state":"failed"'*) ;; *) echo "pending cleanup did not refuse" >&2; exit 1 ;; esac
+        [ -d /private/var/db/com.ventilator.supervisor-read-only ] || { echo "pending state disappeared" >&2; exit 1; }
+        "$0" supervisor-resume "$app"
+        supervisor_terminal
+        echo "supervisor-recovery=$status"
+        python3 -I - "$status" "$old_runner" "$old_observer" <<'PY'
+import json, sys
+s = json.loads(sys.argv[1]); r = s.get('report', {})
+assert s['state'] == 'finished' and r['state'] == 'verified' and r['resumed'] is True
+assert r['journal_clear'] is True and r['reaped'] == 2 and r['runner_uid'] == 0
+assert r['operation_pid'] == r['admission_pid'] == r['admission_samples'] == r['admission_duration_ns'] == 0
+assert r['recovery_samples'] == 61 and r['recovery_duration_ns'] >= 60_000_000_000
+old = {int(sys.argv[2]), int(sys.argv[3])}
+assert all(r[key] not in old for key in ('runner_pid', 'recovery_pid', 'observer_pid'))
+PY
+        echo "supervisor-crash=recovered operation-repeated=false journal-clear=true"
         ;;
     supervisor-status)
         require_app "$@"

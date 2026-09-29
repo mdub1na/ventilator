@@ -6,12 +6,17 @@
 #include <limits.h>
 #include <stdlib.h>
 #include <unistd.h>
+#include <signal.h>
+#include <time.h>
+
+typedef enum { ProbeRun, ProbeCleanup, ProbeCrash, ProbeResume } SupervisorProbeMode;
 
 @interface SupervisorProbeController ()
 @property(nonatomic, strong) NSTask *task;
 @property(nonatomic, copy) NSString *state;
 @property(nonatomic, copy) NSString *reason;
 @property(nonatomic, copy) NSDictionary *report;
+@property(nonatomic, copy) NSDictionary *crash;
 @property(nonatomic) pid_t runnerPID;
 @end
 
@@ -141,14 +146,17 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
         @"backend": @"read_only", @"write_available": @NO, @"daemon_pid": @(getpid()),
         @"runner_pid": @(_runnerPID), @"state": _state} mutableCopy];
     if (_report) result[@"report"] = _report;
+    if (_crash) result[@"crash"] = _crash;
     if (_reason) result[@"reason"] = _reason;
     return result;
 }
 
 - (NSDictionary *)status { @synchronized (self) { return [self statusLocked]; } }
 
-- (NSDictionary *)launchLocked:(BOOL)cleanup {
+- (NSDictionary *)launchLocked:(SupervisorProbeMode)mode {
+    BOOL cleanup = mode == ProbeCleanup;
     _report = nil;
+    _crash = nil;
     _reason = nil;
     _runnerPID = 0;
     if (getuid() != 0 || geteuid() != 0) {
@@ -168,7 +176,8 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
     }
     NSTask *task = [NSTask new];
     task.executableURL = runner;
-    task.arguments = cleanup ? @[@"--cleanup"] : @[];
+    task.arguments = cleanup ? @[@"--cleanup"] : mode == ProbeCrash ? @[@"--crash-observer"] :
+        mode == ProbeResume ? @[@"--resume-pending"] : @[];
     task.environment = @{};
     task.standardInput = [NSFileHandle fileHandleWithNullDevice];
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
@@ -193,10 +202,18 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
         }
         [task waitUntilExit];
         [output.fileHandleForReading closeFile];
+        uint64_t finished = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
         id result = !tooLarge ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         @synchronized (self) {
             self.task = nil;
             if (tooLarge) { self.state = @"failed"; self.reason = @"output"; }
+            else if (mode == ProbeCrash && task.terminationReason == NSTaskTerminationReasonUncaughtSignal &&
+                     task.terminationStatus == SIGKILL &&
+                     HelperSupervisorCrashMarkerValid(result, self.runnerPID, finished)) {
+                self.state = @"interrupted";
+                self.crash = @{@"observer_pid": result[@"observer_pid"], @"journal_pending": @YES,
+                    @"loss_duration_ns": @(finished - [result[@"armed_monotonic_ns"] unsignedLongLongValue])};
+            }
             else if (task.terminationReason != NSTaskTerminationReasonExit || task.terminationStatus != 0) {
                 self.state = @"failed"; self.reason = @"exit";
             } else if (cleanup && [result isEqual:@{@"cleaned": @YES}]) self.state = @"cleaned";
@@ -212,14 +229,28 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
 - (NSDictionary *)start {
     @synchronized (self) {
         if (![_state isEqual:@"idle"] && ![_state isEqual:@"cleaned"]) return [self statusLocked];
-        return [self launchLocked:NO];
+        return [self launchLocked:ProbeRun];
+    }
+}
+
+- (NSDictionary *)startCrash {
+    @synchronized (self) {
+        if (![_state isEqual:@"idle"] && ![_state isEqual:@"cleaned"]) return [self statusLocked];
+        return [self launchLocked:ProbeCrash];
+    }
+}
+
+- (NSDictionary *)resume {
+    @synchronized (self) {
+        if (_task) return [self statusLocked];
+        return [self launchLocked:ProbeResume];
     }
 }
 
 - (NSDictionary *)cleanup {
     @synchronized (self) {
         if (_task) return [self statusLocked];
-        return [self launchLocked:YES];
+        return [self launchLocked:ProbeCleanup];
     }
 }
 @end

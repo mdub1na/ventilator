@@ -20,15 +20,18 @@ tags: [macos, smc, fan-control, safety]
 
 ## 2. Правила
 
-1. Три XPC метода без входных аргументов: `startSupervisorProbeWithReply`, `fetchSupervisorProbeWithReply`, `cleanupSupervisorProbeWithReply`. Они доступны только прежнему проверенному клиенту. Обычный запуск UI не регистрирует службу и не начинает пробу.
+1. Пять XPC методов без входных аргументов: `startSupervisorProbeWithReply`, `startSupervisorCrashProbeWithReply`, `resumeSupervisorProbeWithReply`, `fetchSupervisorProbeWithReply`, `cleanupSupervisorProbeWithReply`. Они доступны только прежнему проверенному клиенту. Обычный запуск UI не регистрирует службу и не начинает пробу.
 2. Daemon определяет sibling `supervisor-probe` рядом с собственным executable. Security framework проверяет Apple anchor, identifier `com.ventilator.helper-ipc.signed-supervisor`, собственный Team ID daemon и целостность всех архитектур. Затем он копирует байты в приватное root состояние и заново проверяет подпись **копии** перед запуском. Копия имеет права `0500`; пользователь не может заменить запускаемый файл после проверки оригинала. Клиент не передаёт путь, argv, PID, SMC ключ или RPM. У runner пустое окружение, stdin/stderr направлены в null; результат ограничен 4096 байтами.
-3. Runner требует real/effective UID 0 до доступа к состоянию. Единственный режим кроме запуска — фиксированный `--cleanup`. Журнал и проверенная копия лежат в `/private/var/db/com.ventilator.supervisor-read-only`: root, `0700`, без симлинка. Родитель `/private/var/db` также проверяется: root, без group/world write. Отдельный наследуемый launch lock `0600` запрещает параллельные пробы, включая дочерние процессы после смерти runner.
+3. Runner требует real/effective UID 0 до доступа к состоянию. Помимо запуска есть только фиксированные `--cleanup`, `--crash-observer`, `--resume-pending`. Журнал и проверенная копия лежат в `/private/var/db/com.ventilator.supervisor-read-only`: root, `0700`, без симлинка. Родитель `/private/var/db` также проверяется: root, без group/world write. Отдельный наследуемый launch lock `0600` запрещает параллельные пробы, включая дочерние процессы после смерти runner.
 4. Чистый старт сначала вызывает `worker_supervisor_observe_baseline`: новый ограниченный reader, 61 исходный снимок за минимум 60 секунд, отдельный PID собран. Это окно не создаёт `pending` или recovery proof. Проверки длительности чтения, свежести доставки, интервала и общего срока совпадают с recovery observer. При недостоверном снимке, зависании или сне допуск не выдаётся.
 5. После окна обычный `control_lease_claim` проверяет последний свежий снимок и прежний порог температур ниже 75 °C. Capability подтверждает только read-only callback этой сборки; она не утверждает, что аппаратный возврат проверен. Затем supervisor сохраняет `pending`, запускает отдельные check-only operation и recovery, собирает их и начинает **новую** минуту observer. Только её подтверждение очищает маркер.
 6. При исходном `pending` runner вызывает только `worker_supervisor_resume`, без операции и первого окна. Check-only recovery откажет при изменённом SMC; аппаратное восстановление отсутствует. Старый живой/неопределённый PID и lock запрещают takeover. Новый runner не отправляет сигнал сохранённому PID.
-7. Состояния XPC: `idle`, `running`, `finished`, `failed`, `cleaned`. `finished` содержит отдельный report: `verified`, `blocked` либо `pending`, UID/PID runner, отдельные PID фаз, число собранных процессов, число снимков/реальную длительность каждого окна, статус журнала и признак resume. Клиент проверяет типы, точный набор полей, согласованность runner и две минуты полного запуска; ложный успех и capability записи отвергаются. `verified` означает проверенный read-only цикл процессов.
-8. Повторный start во время работы или после терминального результата возвращает прежний статус. Cleanup во время работы также не запускает другой процесс. Завершённую пробу очищает тот же подписанный executable: свободный launch lock, чистый journal и подтверждённое отсутствие записанного worker обязательны. `pending` не удаляется для обхода отказа. Перед `unregister`/удалением пакета скрипт требует отсутствие root состояния.
+7. Состояния XPC: `idle`, `running`, `finished`, `failed`, `cleaned`, диагностический `interrupted`. `finished` содержит отдельный report: `verified`, `blocked` либо `pending`, UID/PID runner, отдельные PID фаз, число собранных процессов, число снимков/реальную длительность каждого окна, статус журнала и признак resume. Клиент проверяет типы, точный набор полей, согласованность runner и две минуты полного запуска; ложный успех и capability записи отвергаются. `verified` означает проверенный read-only цикл процессов.
+8. Повторный обычный/crash start во время работы или после терминального результата возвращает прежний статус. Явный resume при отсутствии текущего task запускает только `--resume-pending`: чистое/неопределённое состояние не создаёт operation или начальную минуту, а корректный `pending` допускается прежней защитой владения. Cleanup/resume во время работы возвращают прежний статус. Завершённую пробу очищает тот же подписанный executable: свободный launch lock, чистый journal и подтверждённое отсутствие записанного worker обязательны. `pending` не удаляется для обхода отказа. Перед `unregister`/удалением пакета скрипт требует отсутствие root состояния.
 9. Обычный выход диагностического JVM клиента не останавливает эту фиксированную read-only пробу. При смерти daemon C runner может продолжить свой ограниченный цикл; новый daemon не получает старый report в память. Launch lock защищает от параллельного запуска, журнал сохраняет незавершённость. Привязка будущего writer к жизни daemon/клиента ещё требует отдельного протокола. Диагностическое root состояние сохраняется до разрешённой очистки; production восстановление через reboot с ним не проверено.
+
+10. Crash режим действует только на чистом запуске после обычного начального допуска. При создании recovery observer родитель получает внутренний `observer_started` после устойчивого PID record и разрешения callback. Диагностика проверяет `pending`, текущий parent PID/UID ребёнка через `proc_pidinfo`, пишет ограниченный marker в stdout и вызывает `raise(SIGKILL)` **в самом runner**. Входного PID/сигнала нет. Observer в этой диагностике ожидает monitor потери родителя, не читая SMC; `SIGALRM` через 10 секунд ограничивает отказ monitor. Daemon принимает `interrupted` только при фактическом `NSTaskTerminationReasonUncaughtSignal`/`SIGKILL`, точном root marker и закрытии pipe не позже двух секунд по `CLOCK_MONOTONIC_RAW`. Поздний fallback, другой PID, UID, будущая метка или лишние поля не дают подтверждения.
+11. `interrupted` содержит только дополнительный `crash`: PID observer, `journal_pending=true`, `loss_duration_ns≤2 000 000 000`. Он не создаёт recovery proof. Старое crash evidence запрещено в `running`. Отдельный resume report с `resumed=true` требует нулевые admission/operation, два собранных новых процесса и 61 снимок за новую полную минуту.
 
 ## 3. Сценарии
 
@@ -80,6 +83,30 @@ tags: [macos, smc, fan-control, safety]
 * **Then:** возвращается настоящий executable; скрипт не принимает argv или усечённый `ps comm` за путь runner. Некорректный или недоступный PID отклоняется.
 * **Automated:** `prototype/helper-ipc/process-path-test.py::test_spoofed_runner_argv_does_not_pass_as_the_executable`
 
+### Scenario: Диагностическая авария сохраняет намерение и запрещает повторение операции
+* **Given:** supervisor с подставными показаниями создал собственного recovery observer и устойчивый `pending`.
+* **When:** тот же диагностический hook завершает самого родителя через `SIGKILL`, затем новый владелец выполняет resume с изменённым снимком.
+* **Then:** прежний observer исчезает, cleanup отказывает, operation не повторяется; отказ нового окна сохраняет `pending` без старого proof. Неопределённый или чужой процесс не запускает диагностическую аварию.
+* **Automated:** `prototype/helper-ipc/WorkerSupervisorTest.c::diagnostic_crash_keeps_intent_and_restart_never_repeats_operation`
+
+### Scenario: Поздний выход или неверный marker не подтверждает аварию
+* **Given:** marker имеет чужой UID/PID, будущую метку либо более двух секунд до EOF; ответ содержит неверный crash или старый crash в `running`.
+* **When:** daemon и JNI проверяют диагностический результат.
+* **Then:** `interrupted` не принимается; десятисекундный fallback не выглядит успешным monitor.
+* **Automated:** `prototype/helper-ipc/HelperSupervisorValidationTest.m::interrupted_requires_bounded_root_evidence`
+
+### Scenario: Resume подтверждается только новой минутой без operation
+* **Given:** report утверждает `resumed=true`.
+* **When:** клиент проверяет результат.
+* **Then:** нулевые admission/operation, два новых собранных PID и полная 61-снимочная минута обязательны; повторная операция или короткое окно отклоняются.
+* **Automated:** `prototype/helper-ipc/HelperSupervisorValidationTest.m::resume_requires_a_new_minute_and_no_repeated_operation`
+
+### Scenario: Подписанный root путь проходит аварию и recovery-only restart
+* **Given:** временный подписанный пакет UID 0, отсутствует прежнее root состояние, `Mac15,7`/macOS 27.0.
+* **When:** `supervisor-crash-run` проверяет отказ resume на чистом состоянии, запускает фиксированную аварию, проверяет исчезновение старых процессов и отказ cleanup, затем запускает новый resume.
+* **Then:** доверенный XPC сообщает `interrupted`, потом `verified/resumed=true`, без повторения operation; новый observer собран после полной минуты, журнал очищен. Свежий снимок остаётся системным; root состояние/служба/пакет удалены, фоновая активность восстановлена.
+* **Manual:** `prototype/helper-ipc/integrated-probe.sh` — `supervisor-crash-run`, свежий `--helper-baseline`, затем `supervisor-cleanup`, `unregister`, `cleanup`.
+
 ## 4. Проверка и ограничения
 
 На `Mac15,7`/macOS 27.0 сборка C/Objective-C/JNI и Compose пакета прошла. Полный процессный набор прошёл с новой реальной начальной минутой и отказными reader; остальные helper и изолированные writer/reader тесты также прошли. Signature-only проба проверила оригинал **и скопированные байты**: приняла точную подпись и отклонила чужой identifier, ad hoc, повреждение и отсутствие executable. Она не запускала runner и не читала SMC. Пять мутаций временных копий обнаружены: короткое recovery окно, принятие write capability, очистка `pending`, допуск после отказного начального observer и отключение проверки подписи скопированного executable. Мутанты используют подставные callbacks либо signature-only diagnostic, отдельные временные каталоги и ограниченные группы собственных процессов; writer не подключён. Предки приватного root каталога локально проверены: `/private`, `/private/var` и `/private/var/db` имеют root-владельца и права `0755`; runtime дополнительно проверяет родителя `/private/var/db`.
@@ -103,9 +130,11 @@ Runner PID `58023` завершил полный цикл с `resumed=false`, `s
 
 Этот этап не пишет `Ftst`, режимы или цели. Возврат из ручного управления, зависание в ядре, root crash в аппаратной операции, сон после записи, обновление постоянного helper и восстановление через reboot не подтверждены. M2-01/M2-02 остаются открытыми; допуски записи закрыты.
 
-### 4.2. План следующей проверки потери владельца
+### 4.2. Подготовка проверки потери владельца
 
-**Цель, ещё не реализована:** отдельная команда без входных аргументов запускает фиксированную пробу аварии во втором observer. Она не получает PID или сигнал от клиента. Read-only observer сообщает собственный PID и монотонное время, завершает только своего проверенного родителя через `SIGKILL` и остаётся под существующим monitor потери родителя. Диагностический аварийный предел гарантирует выход тестового observer при отказе monitor; такой поздний выход не считается успехом. Новый явный resume должен принимать только `pending`, не повторять operation и требовать новую полную минуту. Cleanup при `pending` обязан отказать. Прежде чем считать root путь проверенным, нужны отдельные процессные/контрактные тесты, настоящая подписанная проба, исходный снимок и штатное удаление состояния/службы/пакета.
+На `Mac15,7`/macOS 27.0 фиксированные crash/resume команды, C/Objective-C/JNI и Compose пакет собраны. Полный `worker-supervisor-test`, остальные helper контракты, изолированные writer/reader тесты и десять desktop тестов прошли. Отдельный процессный тест с подставными показаниями прошёл без root службы и SMC: диагностический родитель завершился через `SIGKILL`, observer исчез, cleanup отказал, recovery-only restart с изменённым снимком сохранил маркер и не повторил operation. В реализации родитель завершает **себя**, что устраняет отправку сигнала по номеру родителя из ребёнка и гонку повторного использования этого PID.
+
+Пять безопасных мутаций обнаружены на временных копиях и собственных тестовых процессах: отключённый parent hook, игнорирование EOF владельца, принятие позднего маркера, принятие непривилегированного маркера и ненулевой operation при resume. Signature-only проба приняла доверенные оригинал/копию и отклонила другой identifier, ad hoc подпись, повреждение и отсутствие; root task не запускался. Root выполнение через настоящий пакет ещё предстоит; этот раздел описывает подготовку, M2 остаётся открытым.
 
 ## 5. Code anchors
 
@@ -121,3 +150,4 @@ Runner PID `58023` завершил полный цикл с `resumed=false`, `s
 | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` | диагностический CLI настоящего приложения |
 | `prototype/helper-ipc/integrated-probe.sh`, `prototype/helper-ipc/supervisor-signature-smoke.sh`, `prototype/helper-ipc/Makefile` | упаковка, подпись и проверки |
 | `prototype/helper-ipc/helper-status.m`, `prototype/helper-ipc/process-path-test.py` | настоящий executable path вместо argv или усечённого имени |
+| `prototype/helper-ipc/SupervisorProbeCrash.c`, `prototype/helper-ipc/SupervisorProbeCrash.h` | фиксированная собственная авария после создания observer |

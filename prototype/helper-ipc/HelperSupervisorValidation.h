@@ -15,6 +15,19 @@ static inline BOOL SupervisorBool(id value) {
         CFGetTypeID((__bridge CFTypeRef)value) == CFBooleanGetTypeID();
 }
 
+static inline BOOL HelperSupervisorCrashMarkerValid(NSDictionary *marker, pid_t runner, uint64_t now) {
+    if (![marker isKindOfClass:NSDictionary.class] || marker.count != 5 || runner <= 0 ||
+        !SupervisorUInt(marker[@"runner_pid"], INT_MAX) ||
+        [marker[@"runner_pid"] intValue] != runner ||
+        !SupervisorUInt(marker[@"runner_uid"], 0) ||
+        !SupervisorUInt(marker[@"observer_pid"], INT_MAX) ||
+        [marker[@"observer_pid"] intValue] <= 0 || [marker[@"observer_pid"] intValue] == runner ||
+        !SupervisorBool(marker[@"journal_pending"]) || ![marker[@"journal_pending"] boolValue] ||
+        !SupervisorUInt(marker[@"armed_monotonic_ns"], UINT64_MAX)) return NO;
+    uint64_t armed = [marker[@"armed_monotonic_ns"] unsignedLongLongValue];
+    return armed > 0 && now >= armed && now - armed <= UINT64_C(2000000000);
+}
+
 static inline BOOL HelperSupervisorReportValid(NSDictionary *report) {
     if (![report isKindOfClass:NSDictionary.class] || report.count != 14 ||
         ![report[@"state"] isKindOfClass:NSString.class] ||
@@ -64,6 +77,16 @@ static inline BOOL HelperSupervisorResponseValid(NSDictionary *response) {
         !SupervisorUInt(response[@"runner_pid"], INT_MAX) ||
         ![response[@"state"] isKindOfClass:NSString.class]) return NO;
     NSString *state = response[@"state"];
+    if ([state isEqual:@"interrupted"]) {
+        NSDictionary *crash = response[@"crash"];
+        return response.count == 7 && [response[@"runner_pid"] intValue] > 0 &&
+            [crash isKindOfClass:NSDictionary.class] && crash.count == 3 &&
+            SupervisorUInt(crash[@"observer_pid"], INT_MAX) && [crash[@"observer_pid"] intValue] > 0 &&
+            ![crash[@"observer_pid"] isEqual:response[@"runner_pid"]] &&
+            ![crash[@"observer_pid"] isEqual:response[@"daemon_pid"]] &&
+            SupervisorBool(crash[@"journal_pending"]) && [crash[@"journal_pending"] boolValue] &&
+            SupervisorUInt(crash[@"loss_duration_ns"], UINT64_C(2000000000));
+    }
     if ([state isEqual:@"finished"])
         return response.count == 7 && HelperSupervisorReportValid(response[@"report"]) &&
             [response[@"runner_pid"] isEqual:response[@"report"][@"runner_pid"]];

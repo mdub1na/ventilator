@@ -65,6 +65,12 @@
 - (void)startSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
     reply([[SupervisorProbeController shared] start]);
 }
+- (void)startSupervisorCrashProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[SupervisorProbeController shared] startCrash]);
+}
+- (void)resumeSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
+    reply([[SupervisorProbeController shared] resume]);
+}
 - (void)fetchSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
     reply([[SupervisorProbeController shared] status]);
 }
