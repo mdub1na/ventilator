@@ -23,9 +23,10 @@ supervisor-probe: supervisor-probe.c SupervisorProbeStorage.c SupervisorProbeSto
 	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -pthread -framework IOKit \
 		supervisor-probe.c SupervisorProbeStorage.c WorkerSupervisor.c SupervisorOwnership.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
 
-supervisor-probe-test: HelperSupervisorValidationTest SupervisorProbeStorageTest supervisor-probe daemon-status
+supervisor-probe-test: HelperSupervisorValidationTest SupervisorProbeStorageTest supervisor-probe daemon-status helper-status
 	./HelperSupervisorValidationTest
 	./SupervisorProbeStorageTest
+	python3 process-path-test.py
 	@test "$$(id -u)" != 0 || { echo "run the refusal test without sudo" >&2; exit 1; }; \
 	status=0; ./supervisor-probe >/dev/null 2>&1 || status=$$?; test "$$status" = 2 || exit 1; \
 	status=0; ./supervisor-probe --cleanup >/dev/null 2>&1 || status=$$?; test "$$status" = 2

@@ -91,6 +91,8 @@ The separate root in-flight probe passed on Mac15,7/macOS 27.0. The request rema
 
 `make supervisor-probe-test` checks strict result validation, exclusive private storage and the runner's refusal of an unprivileged invocation. `sh supervisor-signature-smoke.sh` additionally requires a locally valid Apple Development identity: the same daemon's signature-only diagnostic accepts its signed sibling and rejects a different identifier, ad hoc signing, tampering and absence. It does not launch a task or access SMC.
 
+The local `helper-status process-path PID` diagnostic reads the full executable path through macOS `proc_pidpath`. `supervisor-start` requires this fixed root path and a separate UID 0 check: `ps comm` can truncate long names, and argv can name a different executable. `process-path-test.py` checks a spoofed runner argv and invalid PIDs without privileges, service registration or SMC access.
+
 `integrated-probe.sh prepare` now includes the separately signed `supervisor-probe` executable. After registration and background approval, run:
 
 ```sh
@@ -111,3 +113,5 @@ Before removing the temporary registration or package, run:
 The daemon stages a bounded copy of the sibling executable in root-owned `0700` storage under `/private/var/db`, then verifies the copied signature before executing its `0500` file. This prevents user-owned bundle replacement between validation and launch. The signature smoke also validates copied bytes in disposable user-owned fixtures, without executing them.
 
 Cleanup refuses a running probe, pending intent or live/uncertain recorded worker. It deletes only the fixed private root diagnostic state and staged executable after those guards pass. Never delete its state to bypass an error. Restore the prior background switch after removal. The read-only runner may outlive a daemon crash; this integration does not yet bind a future writer to daemon/client lifetime or establish production recovery through reboot. See the [protocol and evidence](../../docs/features/helper-supervisor-probe.md).
+
+On Mac15,7/macOS 27.0, the signed root cycle passed on 2026-09-29: `verified`, two independent 61-sample windows of 62.910562542 and 65.540649042 seconds, four reaped children and a clear journal. The real executable path and UID 0 were checked independently while the runner was alive. A fresh SMC snapshot remained in system mode. Root state, service and package were removed, all probe PIDs were absent, and background activity returned to off. No SMC write was performed.

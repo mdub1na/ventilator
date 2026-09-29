@@ -2,7 +2,7 @@
 id: helper-supervisor-probe
 title: Подписанный read-only supervisor из root helper
 type: feature
-status: draft
+status: active
 owner: unassigned
 involved_services: [helper-ipc-prototype]
 client_entries: []
@@ -74,9 +74,32 @@ tags: [macos, smc, fan-control, safety]
 * **Then:** отдельный root runner проходит начальное окно, check-only operation/recovery и новую минуту observer; возвращает `verified`, четыре собранных PID, чистый journal и `write_available=false`. Cleanup удаляет root состояние до отмены регистрации и удаления пакета.
 * **Manual:** `prototype/helper-ipc/integrated-probe.sh` — `supervisor-start`, `supervisor-status`, `supervisor-cleanup`, `unregister`, `cleanup`.
 
+### Scenario: Имя argv не подменяет executable процесса
+* **Given:** обычный процесс запущен с `argv[0]`, совпадающим с длинным путём root runner.
+* **When:** локальный диагностический клиент читает путь по PID через `proc_pidpath`.
+* **Then:** возвращается настоящий executable; скрипт не принимает argv или усечённый `ps comm` за путь runner. Некорректный или недоступный PID отклоняется.
+* **Automated:** `prototype/helper-ipc/process-path-test.py::test_spoofed_runner_argv_does_not_pass_as_the_executable`
+
 ## 4. Проверка и ограничения
 
-На `Mac15,7`/macOS 27.0 сборка C/Objective-C/JNI и Compose пакета прошла. Полный процессный набор прошёл с новой реальной начальной минутой и отказными reader; остальные helper и изолированные writer/reader тесты также прошли. Signature-only проба проверила оригинал **и скопированные байты**: приняла точную подпись и отклонила чужой identifier, ad hoc, повреждение и отсутствие executable. Она не запускала runner и не читала SMC. Пять мутаций временных копий обнаружены: короткое recovery окно, принятие write capability, очистка `pending`, допуск после отказного начального observer и отключение проверки подписи скопированного executable. Мутанты используют подставные callbacks либо signature-only diagnostic, отдельные временные каталоги и ограниченные группы собственных процессов; writer не подключён. Предки приватного root каталога локально проверены: `/private`, `/private/var` и `/private/var/db` имеют root-владельца и права `0755`; runtime дополнительно проверяет родителя `/private/var/db`. Реальная root проба готовится; её результат будет внесён после исполнения.
+На `Mac15,7`/macOS 27.0 сборка C/Objective-C/JNI и Compose пакета прошла. Полный процессный набор прошёл с новой реальной начальной минутой и отказными reader; остальные helper и изолированные writer/reader тесты также прошли. Signature-only проба проверила оригинал **и скопированные байты**: приняла точную подпись и отклонила чужой identifier, ad hoc, повреждение и отсутствие executable. Она не запускала runner и не читала SMC. Пять мутаций временных копий обнаружены: короткое recovery окно, принятие write capability, очистка `pending`, допуск после отказного начального observer и отключение проверки подписи скопированного executable. Мутанты используют подставные callbacks либо signature-only diagnostic, отдельные временные каталоги и ограниченные группы собственных процессов; writer не подключён. Предки приватного root каталога локально проверены: `/private`, `/private/var` и `/private/var/db` имеют root-владельца и права `0755`; runtime дополнительно проверяет родителя `/private/var/db`.
+
+### 4.1. Реальный root цикл, 2026-09-29
+
+Источник: `integrated-probe.sh check/supervisor-start/supervisor-status/supervisor-cleanup/unregister/cleanup` из временной подписанной копии Compose приложения на `Mac15,7`/macOS 27.0, независимые `ps`, `proc_pidpath`, `launchctl` и интерфейс системных настроек. После Touch ID регистрация стала `enabled`; daemon PID `57929` работал с UID 0. Доверенный JNI/XPC клиент получил снимок; другой подписанный identifier и ad hoc клиент отклонены.
+
+Runner PID `58023` завершил полный цикл с `resumed=false`, `state=verified`, `runner_uid=0`, `journal_clear=true`, `reaped=4` и `write_available=false`:
+
+| Фаза | Отдельный PID | Снимки / длительность |
+|---|---|---|
+| Начальный reader | `58033` | 61 / 62,910562542 с |
+| Check-only operation | `58204` | процесс собран |
+| Check-only recovery | `58205` | процесс собран |
+| Новый recovery observer | `58206` | 61 / 65,540649042 с |
+
+Первый `supervisor-start` ошибочно завершил **скрипт проверки** с `runner path differs`: macOS `ps comm` обрезал длинное имя до `/var/db/com.vent`. Сам runner продолжил ограниченный цикл. Пока он работал, независимый `proc_pidpath(58023)` вернул точный `/private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1`, а `ps` подтвердил UID 0. Скрипт исправлен: локальный `helper-status process-path PID` использует тот же системный API, без передачи PID в XPC; тест с ложным `argv[0]` возвращает настоящий `/bin/sleep` и отклоняет подмену. Исправленный диагностический клиент и отказные PID проверены локально; второй root цикл ради этой проверки не запускался.
+
+Свежий снимок после цикла подтвердил `Ftst=0`, режимы `[3,3]`, цели `[0,0]`, фактические RPM `[0,0]`; CPU/GPU/SSD — `[52,84; 46,22; 32,18]` °C. Cleanup вернул `cleaned` и удалил root каталог. Затем `unregister` подтвердил `notRegistered` и отсутствие system службы; временный пакет удалён. Независимая проверка не обнаружила каталог, пакет или PID daemon/runner/фаз/cleanup. В системных настройках `background-switch-Ventilator` вернулся в `off`. Запись в SMC не выполнялась.
 
 Этот этап не пишет `Ftst`, режимы или цели. Возврат из ручного управления, зависание в ядре, root crash в аппаратной операции, сон после записи, обновление постоянного helper и восстановление через reboot не подтверждены. M2-01/M2-02 остаются открытыми; допуски записи закрыты.
 
@@ -93,3 +116,4 @@ tags: [macos, smc, fan-control, safety]
 | `prototype/helper-ipc/HelperStatus.h`, `prototype/helper-ipc/daemon-status.m`, `prototype/helper-ipc/HelperProbeBridge.m` | XPC и JNI команды без входных параметров |
 | `prototype/desktop-app/src/main/kotlin/ventilator/desktop/helper/HelperProbeCommand.kt` | диагностический CLI настоящего приложения |
 | `prototype/helper-ipc/integrated-probe.sh`, `prototype/helper-ipc/supervisor-signature-smoke.sh`, `prototype/helper-ipc/Makefile` | упаковка, подпись и проверки |
+| `prototype/helper-ipc/helper-status.m`, `prototype/helper-ipc/process-path-test.py` | настоящий executable path вместо argv или усечённого имени |

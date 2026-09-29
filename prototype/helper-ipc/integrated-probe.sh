@@ -207,6 +207,7 @@ case "$action" in
         ;;
     supervisor-start)
         require_app "$@"
+        make helper-status
         [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
         status=$(ventilator --helper-supervisor-start)
         echo "supervisor-start=$status"
@@ -214,7 +215,7 @@ case "$action" in
         pid=$(printf '%s\n' "$status" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
         is_uint "$pid" && [ "$pid" -gt 0 ] || { echo "runner PID missing" >&2; exit 1; }
         [ "$(ps -p "$pid" -o uid= | tr -d ' ')" = 0 ] || { echo "runner is not UID 0" >&2; exit 1; }
-        [ "$(ps -p "$pid" -o comm=)" = /private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1 ] || { echo "runner path differs" >&2; exit 1; }
+        [ "$(./helper-status process-path "$pid")" = /private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1 ] || { echo "runner path differs or is unavailable" >&2; exit 1; }
         echo "supervisor-process=verified uid=0 pid=$pid"
         ;;
     supervisor-status)

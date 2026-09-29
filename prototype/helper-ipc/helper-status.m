@@ -1,6 +1,9 @@
 #import "HelperStatus.h"
 #import "HelperBaselineValidation.h"
 #include <ctype.h>
+#include <errno.h>
+#include <limits.h>
+#include <libproc.h>
 #include <unistd.h>
 
 @interface StatusProvider : NSObject <HelperStatusXPC>
@@ -178,6 +181,22 @@ static BOOL validTeamID(const char *team) {
 
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        if (argc == 3 && strcmp(argv[1], "process-path") == 0) {
+            for (const char *digit = argv[2]; *digit; ++digit) {
+                if (!isdigit((unsigned char)*digit)) return 2;
+            }
+            errno = 0;
+            char *end = NULL;
+            long pid = strtol(argv[2], &end, 10);
+            if (errno || end == argv[2] || *end || pid <= 0 || pid > INT_MAX) return 2;
+            char path[PROC_PIDPATHINFO_MAXSIZE] = {0};
+            if (proc_pidpath((int)pid, path, sizeof(path)) <= 0) {
+                fputs("process executable path unavailable\n", stderr);
+                return 1;
+            }
+            puts(path);
+            return 0;
+        }
         if (argc == 4 && validTeamID(argv[3]) &&
             (strcmp(argv[1], "request-signed") == 0 ||
              strcmp(argv[1], "request-baseline-signed") == 0)) {
@@ -189,7 +208,8 @@ int main(int argc, const char *argv[]) {
         }
         if (argc != 4 || !validCDHash(argv[3])) {
             fprintf(stderr, "Usage: %s serve|request MACH_SERVICE_NAME EXPECTED_PEER_CDHASH\n"
-                    "   or: %s request-signed|request-baseline-signed MACH_SERVICE_NAME EXPECTED_DAEMON_TEAM_ID\n", argv[0], argv[0]);
+                    "   or: %s request-signed|request-baseline-signed MACH_SERVICE_NAME EXPECTED_DAEMON_TEAM_ID\n"
+                    "   or: %s process-path PID\n", argv[0], argv[0], argv[0]);
             return 2;
         }
         NSString *serviceName = [NSString stringWithUTF8String:argv[2]];
