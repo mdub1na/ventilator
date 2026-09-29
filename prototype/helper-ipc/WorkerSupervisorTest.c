@@ -133,17 +133,21 @@ static void fixture_free(Fixture *fixture, int directory_fd) {
 
 static ControlLease held_lease(void) {
     uint64_t now = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
-    assert(now > 61 * SECOND);
+    assert(now > 0);
     SmcBaselineSnapshot snapshot = baseline();
     ControlLease lease = {0};
     // Only initial admission is synthetic. The supervised proof uses REAL time.
-    uint64_t started = now - CONTROL_LEASE_BASELINE_NS;
+    uint64_t started = SECOND;
     control_lease_start(&lease, CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot, started);
     for (unsigned index = 1; index < CONTROL_LEASE_REQUIRED_SAMPLES; ++index) {
         control_lease_sample(&lease, SMC_BASELINE_OK, &snapshot, started + index * SECOND);
     }
-    assert(control_lease_claim(&lease, 7, now, true,
+    assert(control_lease_claim(&lease, 7, 61 * SECOND, true,
                                CONTROL_INTENT_CLEAR, SMC_BASELINE_OK, &snapshot));
+    // Admission is simulated, so its HELD deadline is anchored to the real
+    // clock separately. A freshly booted CI host need not already be 61s old.
+    lease.last_sample_ns = now;
+    lease.expires_at_ns = now + CONTROL_LEASE_TTL_NS;
     return lease;
 }
 
