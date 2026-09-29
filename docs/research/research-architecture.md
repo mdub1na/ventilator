@@ -139,6 +139,12 @@ date: 2026-09-23
 
 Подписанная root проба также прошла. После ручного переключения фона и системного подтверждения регистрация стала `enabled`; daemon `78446` с UID 0 принял доверенный клиент и отклонил чужие. Resume на чистом состоянии не запустил фаз. Runner `78630` завершился через `SIGKILL`, observer `78866` исчез; от маркера до закрытия stdout и сбора task прошло 3,089083 мс, `pending` сохранился, cleanup отказал. Новый root runner `78901` вернул `verified/resumed=true`, recovery `78912`, observer `78913`, `reaped=2`, 61 снимок за 62,988355125 с и чистый journal при нулевых admission/operation. Настоящие пути и отсутствие прежних процессов проверены через macOS kernel API. Свежий снимок остался системным, root состояние/служба/пакет удалены, все записанные PID отсутствовали, переключатель `off` подтверждён после повторного открытия настроек. [Фактический протокол](../features/helper-supervisor-probe.md#43-реальная-потеря-root-владельца-2026-09-29) фиксирует источник, бинарник и ограничения. Проверена смерть родителя в диагностическом observer; SMC записи, аппаратное восстановление и привязка будущего writer к жизни daemon/client ещё не проверены, оба пункта M2 открыты.
 
+### 1e. Связь runner с XPC владельцем — локальные read-only проверки
+
+Для следующей подписанной пробы код получил отдельную pipe от объекта принятого XPC соединения к root runner. Другие соединения могут читать статус, но закрывают только собственную pipe. Runner без grant либо после EOF не продолжает; его собственные worker завершаются при EOF отдельного socket. JNI держит то же соединение до терминального результата, сравнивает PID daemon/runner, а другой start получает `failed/busy`. Это механизм **read-only** прототипа: writer не линкуется.
+
+На `Mac15,7`/macOS 27.0 локальный процессный тест с подставным оборудованием подтвердил выход runner и worker менее чем за две секунды при закрытии upstream в четырёх фазах, а также при `SIGKILL` собственного тестового процесса daemon. После потери при операции/recovery/observer `pending` сохранился, cleanup отказал, recovery-only restart не повторил операцию. Анонимное локальное XPC соединение подтвердило, что invalidation чужого клиента оставляет канал владельца, а invalidation владельца закрывает его. [Сценарии и границы](../features/helper-supervisor-probe.md) отделяют эти проверки от предстоящего испытания подписанного root пути; новый аппаратный допуск не открыт.
+
 ## 2. Решения на текущем этапе
 
 
@@ -222,6 +228,7 @@ date: 2026-09-23
 | Независимый read-only наблюдатель состояния | `prototype/smc-write-trial/smc-write-trial.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Тесты preflight и восстановления | `prototype/smc-write-trial/trial_logic_test.c`, `prototype/smc-write-trial/trial_actions_test.c` |
 | Изолированная модель будущего срока владения helper | `prototype/helper-ipc/ControlLease.c`, `prototype/helper-ipc/ControlLeaseTest.c` |
+| Привязка root runner к принятому XPC соединению | `prototype/helper-ipc/SupervisorProbeOwner.m`, `prototype/helper-ipc/SupervisorRunnerLifetime.c`, `prototype/helper-ipc/SupervisorProbeOwnerTest.m` |
 | Изолированный устойчивый маркер намерения helper | `prototype/helper-ipc/ControlIntentJournal.c`, `prototype/helper-ipc/ControlIntentJournalTest.c` |
 | Нативный совмещённый значок | `prototype/menu-bar/StatusItem.swift` |
 | Интегрированный AppKit значок | `prototype/menu-bar/StatusItemBridge.swift`, `prototype/menu-bar/StatusArtwork.swift` |

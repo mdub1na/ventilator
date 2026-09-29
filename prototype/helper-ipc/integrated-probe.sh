@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-crash-start APP | supervisor-resume APP | supervisor-crash-run APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-crash-start APP | supervisor-resume APP | supervisor-crash-run APP | supervisor-client-loss-run APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -236,10 +236,33 @@ case "$action" in
             supervisor-crash-start) command=--helper-supervisor-crash-start ;;
             supervisor-resume) command=--helper-supervisor-resume ;;
         esac
-        status=$(ventilator "$command")
+        owned_log=$(mktemp "${TMPDIR:-/tmp}/ventilator-supervisor-client.XXXXXX")
+        ventilator "$command" >"$owned_log" 2>&1 &
+        owned_client_pid=$!
+        trap 'kill -TERM "$owned_client_pid" 2>/dev/null || true' EXIT
+        attempt=0
+        initial=
+        while [ "$attempt" -lt 50 ]; do
+            initial=$(head -n 1 "$owned_log")
+            [ -z "$initial" ] || break
+            kill -0 "$owned_client_pid" 2>/dev/null || break
+            attempt=$((attempt + 1))
+            sleep 0.2
+        done
+        case "$initial" in *'"state":"running"'*) ;; *) echo "supervisor did not start: $owned_log" >&2; exit 1 ;; esac
+        if kill -0 "$owned_client_pid" 2>/dev/null; then
+            supervisor_identity "$initial"
+        elif [ "$action" != supervisor-resume ]; then
+            echo "supervisor client ended before identity check: $owned_log" >&2; exit 1
+        fi
+        if ! wait "$owned_client_pid"; then
+            echo "supervisor client failed; retain state and output: $owned_log" >&2; exit 1
+        fi
+        trap - EXIT
+        status=$(tail -n 1 "$owned_log")
+        rm "$owned_log"
         echo "$action=$status"
-        case "$status" in *'"state":"running"'*) ;; *) echo "supervisor did not start" >&2; exit 1 ;; esac
-        supervisor_identity "$status"
+        case "$status" in *'"state":"running"'*) echo "supervisor client returned before completion" >&2; exit 1 ;; esac
         ;;
     supervisor-crash-run)
         require_app "$@"
@@ -249,7 +272,8 @@ case "$action" in
         }
         make helper-status
         # Verify the new explicit resume cannot start an operation on clean state.
-        status=$(ventilator --helper-supervisor-resume)
+        raw=$(ventilator --helper-supervisor-resume)
+        status=$(printf '%s\n' "$raw" | tail -n 1)
         supervisor_terminal
         echo "clean-resume=$status"
         python3 -I - "$status" <<'PY'
@@ -297,6 +321,66 @@ old = {int(sys.argv[2]), int(sys.argv[3])}
 assert all(r[key] not in old for key in ('runner_pid', 'recovery_pid', 'observer_pid'))
 PY
         echo "supervisor-crash=recovered operation-repeated=false journal-clear=true"
+        ;;
+    supervisor-client-loss-run)
+        require_app "$@"
+        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        [ ! -e /private/var/db/com.ventilator.supervisor-read-only ] || {
+            echo "client loss requires absent prior probe state" >&2; exit 1;
+        }
+        make helper-status
+        owner_log=$(mktemp "${TMPDIR:-/tmp}/ventilator-owned-client.XXXXXX")
+        ventilator --helper-supervisor-start >"$owner_log" 2>&1 &
+        owned_client_pid=$!
+        trap 'kill -TERM "$owned_client_pid" 2>/dev/null || true' EXIT
+        attempt=0
+        initial=
+        while [ "$attempt" -lt 50 ]; do
+            initial=$(head -n 1 "$owner_log")
+            [ -z "$initial" ] || break
+            kill -0 "$owned_client_pid" 2>/dev/null || break
+            attempt=$((attempt + 1))
+            sleep 0.2
+        done
+        case "$initial" in *'"state":"running"'*) ;; *) echo "owned client did not start: $owner_log" >&2; exit 1 ;; esac
+        supervisor_identity "$initial"
+        status=$(ventilator --helper-supervisor-status)
+        python3 -I - "$initial" "$status" <<'PY'
+import json, sys
+a, b = map(json.loads, sys.argv[1:])
+assert b['state'] == 'running' and b['daemon_pid'] == a['daemon_pid']
+assert b['runner_pid'] == a['runner_pid'] and b['write_available'] is False
+PY
+        echo "other-connection=read-only owner-still-running"
+        busy=$(ventilator --helper-supervisor-start)
+        python3 -I - "$initial" "$busy" <<'PY'
+import json, sys
+a, b = map(json.loads, sys.argv[1:])
+assert b['state'] == 'failed' and b['reason'] == 'busy'
+assert b['daemon_pid'] == a['daemon_pid'] and b['runner_pid'] == a['runner_pid']
+PY
+        echo "other-connection=busy ownership-not-transferred"
+        owned_runner=$(printf '%s\n' "$initial" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
+        kill -TERM "$owned_client_pid"
+        wait "$owned_client_pid" 2>/dev/null || true
+        trap - EXIT
+        attempt=0
+        while [ "$attempt" -lt 40 ]; do
+            status=$(ventilator --helper-supervisor-status)
+            case "$status" in *'"reason":"owner_lost"'*'"state":"failed"'*) break ;; esac
+            attempt=$((attempt + 1))
+            sleep 0.1
+        done
+        python3 -I - "$initial" "$status" <<'PY'
+import json, sys
+a, b = map(json.loads, sys.argv[1:])
+assert b['state'] == 'failed' and b['reason'] == 'owner_lost'
+assert b['daemon_pid'] == a['daemon_pid'] and b['runner_pid'] == a['runner_pid']
+assert b['write_available'] is False
+PY
+        ./helper-status process-absent "$owned_runner"
+        echo "client-loss=runner-exited owner-lost=true"
+        rm "$owner_log"
         ;;
     supervisor-status)
         require_app "$@"

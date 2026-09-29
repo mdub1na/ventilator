@@ -92,7 +92,15 @@ static inline BOOL HelperSupervisorResponseValid(NSDictionary *response) {
             [response[@"runner_pid"] isEqual:response[@"report"][@"runner_pid"]];
     if ([state isEqual:@"failed"])
         return response.count == 7 &&
-            [@[@"permission", @"signature", @"launch", @"exit", @"contract", @"output"] containsObject:response[@"reason"]];
+            [@[@"permission", @"signature", @"launch", @"exit", @"contract", @"output", @"owner_lost", @"busy"] containsObject:response[@"reason"]];
     if ([state isEqual:@"running"]) return response.count == 6 && [response[@"runner_pid"] intValue] > 0;
     return response.count == 6 && ([state isEqual:@"idle"] || [state isEqual:@"cleaned"]);
+}
+
+// A held diagnostic connection must not auto-reconnect into a different daemon
+// or accept a different runner's terminal result after interruption/restart.
+static inline BOOL HelperSupervisorSameRunValid(NSDictionary *started, NSDictionary *response) {
+    return HelperSupervisorResponseValid(started) && HelperSupervisorResponseValid(response) &&
+        [started[@"daemon_pid"] isEqual:response[@"daemon_pid"]] &&
+        [started[@"runner_pid"] isEqual:response[@"runner_pid"]];
 }

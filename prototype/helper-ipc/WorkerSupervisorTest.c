@@ -2,6 +2,7 @@
 #include "SupervisorOwnership.h"
 #include "SupervisorProbeCrash.h"
 #include "SupervisorProbeStorage.h"
+#include "SupervisorRunnerLifetime.h"
 
 #include <assert.h>
 #include <errno.h>
@@ -37,6 +38,7 @@ typedef struct {
     volatile unsigned intent_seen;
     volatile unsigned record_seen;
     volatile unsigned operation_gone;
+    int lifetime_fd;
 } Fixture;
 
 static SmcBaselineSnapshot baseline(void) {
@@ -520,6 +522,132 @@ static void unsafe_ownership_files_never_allow_a_callback(void) {
     fixture_free(fixture, dir);
 }
 
+static void check_runner_owner(void *context) {
+    Fixture *fixture = context;
+    supervisor_runner_lifetime_check(fixture->lifetime_fd);
+}
+
+// Real processes, clocks and pipes; every equipment callback remains a fake.
+static void upstream_loss_stops_runner_and_each_worker_phase(void) {
+    for (unsigned phase = 0; phase < 4; ++phase) {
+        int dir, channel[2];
+        Fixture *fixture = fixture_new(&dir);
+        fixture->operation = phase == 1 ? BUSY : EXIT_OK;
+        fixture->recovery = phase == 2 ? BUSY : EXIT_OK;
+        fixture->reading = READ_BUSY;
+        assert(pipe(channel) == 0 && write(channel[1], "G", 1) == 1);
+        pid_t runner = fork();
+        assert(runner >= 0);
+        if (runner == 0) {
+            assert(close(channel[1]) == 0);
+            assert(supervisor_runner_lifetime_enter(channel[0]));
+            fixture->lifetime_fd = channel[0];
+            WorkerSupervisorBackend backend = {.context = fixture, .operate = operate,
+                .recover = recover, .read = read_snapshot, .parent_check = check_runner_owner};
+            WorkerSupervisorLimits bound = limits();
+            bound.operation_ns = bound.recovery_ns = 10 * SECOND;
+            ControlLease lease = held_lease();
+            if (phase == 0) {
+                SmcBaselineSnapshot latest = {0};
+                (void)worker_supervisor_observe_baseline(dir, &lease, &latest, backend, bound);
+            } else (void)worker_supervisor_run(dir, &lease, backend, bound, NULL);
+            _exit(1);
+        }
+        assert(close(channel[0]) == 0);
+        volatile pid_t *slot = phase == 1 ? &fixture->operation_pid :
+            phase == 2 ? &fixture->recovery_pid : &fixture->reader_pid;
+        wait_for_pid(slot);
+        pid_t worker = *slot;
+        uint64_t lost = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+        assert(close(channel[1]) == 0); // Same EOF as client invalidation or daemon death.
+        int status = 0;
+        uint64_t deadline = lost + 2 * SECOND;
+        while (waitpid(runner, &status, WNOHANG) == 0) {
+            assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline);
+            struct timespec delay = {.tv_nsec = 10000000}; (void)nanosleep(&delay, NULL);
+        }
+        assert(WIFEXITED(status) && WEXITSTATUS(status) == 125);
+        wait_for_absence(worker);
+        assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - lost < 2 * SECOND);
+        assert(control_intent_read(dir) == (phase == 0 ? CONTROL_INTENT_CLEAR : CONTROL_INTENT_PENDING));
+        if (phase != 0) {
+            assert(!supervisor_probe_cleanup(dir));
+            unsigned operations = fixture->operations;
+            fixture->recovery = EXIT_OK; fixture->reading = CHANGED;
+            ControlLease lease = held_lease(); lease.recovery_verified = true;
+            WorkerSupervisorReport report = resume_when_available(dir, &lease, fixture);
+            assert(report.result == SUPERVISOR_OBSERVATION_FAILED && report.operation_pid == 0);
+            assert(fixture->operations == operations && !lease.recovery_verified);
+            assert(control_intent_read(dir) == CONTROL_INTENT_PENDING);
+        }
+        fixture_free(fixture, dir);
+    }
+}
+
+static void a_queued_grant_cannot_hide_lost_owner_or_unexpected_data(void) {
+    for (unsigned variant = 0; variant < 3; ++variant) {
+        int channel[2];
+        assert(pipe(channel) == 0 && write(channel[1], "G", 1) == 1);
+        if (variant == 1) assert(write(channel[1], "X", 1) == 1);
+        assert(close(channel[1]) == 0);
+        pid_t child = fork(); assert(child >= 0);
+        if (child == 0) {
+            if (variant == 2) {
+                int null = open("/dev/null", O_RDONLY);
+                assert(!supervisor_runner_lifetime_enter(null));
+                _exit(0);
+            }
+            (void)supervisor_runner_lifetime_enter(channel[0]);
+            _exit(1);
+        }
+        assert(close(channel[0]) == 0);
+        int status = 0;
+        assert(waitpid(child, &status, 0) == child && WIFEXITED(status));
+        assert(WEXITSTATUS(status) == (variant == 2 ? 0 : 125));
+    }
+}
+
+static void daemon_process_death_closes_the_runner_pipe(void) {
+    int dir, channel[2];
+    Fixture *fixture = fixture_new(&dir);
+    fixture->operation = BUSY;
+    assert(pipe(channel) == 0 && write(channel[1], "G", 1) == 1);
+    pid_t runner = fork(); assert(runner >= 0);
+    if (runner == 0) {
+        assert(close(channel[1]) == 0);
+        assert(supervisor_runner_lifetime_enter(channel[0]));
+        fixture->lifetime_fd = channel[0];
+        ControlLease lease = held_lease();
+        WorkerSupervisorBackend backend = {.context = fixture, .operate = operate,
+            .recover = recover, .read = read_snapshot, .parent_check = check_runner_owner};
+        (void)worker_supervisor_run(dir, &lease, backend, limits(), NULL);
+        _exit(1);
+    }
+    pid_t daemon = fork(); assert(daemon >= 0);
+    if (daemon == 0) {
+        assert(close(channel[0]) == 0);
+        for (;;) pause(); // Own test process alone retains the writer.
+    }
+    assert(close(channel[0]) == 0 && close(channel[1]) == 0);
+    wait_for_pid(&fixture->operation_pid);
+    pid_t worker = fixture->operation_pid;
+    uint64_t lost = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW);
+    assert(kill(daemon, SIGKILL) == 0);
+    int status = 0;
+    assert(waitpid(daemon, &status, 0) == daemon && WIFSIGNALED(status));
+    uint64_t deadline = lost + 2 * SECOND;
+    pid_t waited;
+    while ((waited = waitpid(runner, &status, WNOHANG)) == 0) {
+        assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) < deadline);
+        struct timespec delay = {.tv_nsec = 10000000}; (void)nanosleep(&delay, NULL);
+    }
+    assert(waited == runner && WIFEXITED(status) && WEXITSTATUS(status) == 125);
+    wait_for_absence(worker);
+    assert(clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) - lost < 2 * SECOND);
+    assert(control_intent_read(dir) == CONTROL_INTENT_PENDING);
+    fixture_free(fixture, dir);
+}
+
 static void initial_baseline_is_bounded_and_never_recovery_proof(bool full) {
     const Reading readings[] = {BASELINE, CHANGED, READ_FAILED, READ_STOPPED};
     for (unsigned index = full ? 0 : 1; index < sizeof(readings) / sizeof(readings[0]); ++index) {
@@ -552,6 +680,13 @@ static void initial_baseline_is_bounded_and_never_recovery_proof(bool full) {
 }
 
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "--lifetime-only") == 0) {
+        upstream_loss_stops_runner_and_each_worker_phase();
+        a_queued_grant_cannot_hide_lost_owner_or_unexpected_data();
+        daemon_process_death_closes_the_runner_pipe();
+        puts("runner lifetime process tests passed (no SMC access)");
+        return 0;
+    }
     if (argc == 2 && strcmp(argv[1], "--owner-loss-only") == 0) {
         diagnostic_crash_keeps_intent_and_restart_never_repeats_operation();
         puts("diagnostic owner loss tests passed");
@@ -573,6 +708,9 @@ int main(int argc, char **argv) {
     stopped_or_recorded_live_worker_blocks_a_new_owner();
     missing_or_malformed_worker_record_never_allows_restart();
     unsafe_ownership_files_never_allow_a_callback();
+    upstream_loss_stops_runner_and_each_worker_phase();
+    a_queued_grant_cannot_hide_lost_owner_or_unexpected_data();
+    daemon_process_death_closes_the_runner_pipe();
     initial_baseline_is_bounded_and_never_recovery_proof(argc == 1);
     puts("worker supervisor process tests passed (no SMC access)");
     return 0;

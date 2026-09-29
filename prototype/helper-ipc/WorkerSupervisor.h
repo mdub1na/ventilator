@@ -25,6 +25,9 @@ typedef struct {
     // Optional fixed diagnostic in the parent after a durable child grant.
     // Must not spawn/reap children or perform hardware operations.
     void (*observer_started)(void *context, pid_t observer, bool recovering);
+    // Optional parent-only lifetime gate. May exit the caller on owner loss;
+    // called around grants, waits and proof consumption, never in workers.
+    void (*parent_check)(void *context);
 } WorkerSupervisorBackend;
 
 typedef enum {

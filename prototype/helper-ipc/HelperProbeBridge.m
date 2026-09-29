@@ -6,6 +6,8 @@
 #import <Security/Security.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <jni.h>
+#include <stdio.h>
+#include <time.h>
 
 static NSString *const ServiceName = @"com.ventilator.helper-ipc.read-only";
 static NSString *const PlistName = @"com.ventilator.helper-ipc.read-only.plist";
@@ -114,6 +116,10 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
         options:NSXPCConnectionPrivileged];
     connection.remoteObjectInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
     [connection setCodeSigningRequirement:requirement];
+    NSObject *connectionState = [NSObject new];
+    __block BOOL disconnected = NO;
+    connection.interruptionHandler = ^{ @synchronized (connectionState) { disconnected = YES; } };
+    connection.invalidationHandler = ^{ @synchronized (connectionState) { disconnected = YES; } };
     [connection resume];
 
     dispatch_semaphore_t done = dispatch_semaphore_create(0);
@@ -140,6 +146,42 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
         case DaemonRequestSupervisorCleanup: [remote cleanupSupervisorProbeWithReply:complete]; break;
     }
     long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+    BOOL hold = request == DaemonRequestSupervisorStart || request == DaemonRequestSupervisorCrashStart ||
+                request == DaemonRequestSupervisorResume || request == DaemonRequestSupervisorCleanup;
+    if (timeout == 0 && !requestError && hold && HelperSupervisorResponseValid(result) &&
+        [result[@"state"] isEqual:@"running"]) {
+        NSDictionary *started = result;
+        // Emit the initial identity while this same signed connection remains
+        // alive, so the driver can verify/interrupt its own diagnostic client.
+        if (request != DaemonRequestSupervisorCleanup) {
+            NSData *json = [NSJSONSerialization dataWithJSONObject:started options:NSJSONWritingSortedKeys error:nil];
+            if (json) { fwrite(json.bytes, 1, json.length, stdout); fputc('\n', stdout); fflush(stdout); }
+        }
+        uint64_t deadline = clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) + UINT64_C(180000000000);
+        while ([result[@"state"] isEqual:@"running"]) {
+            struct timespec delay = {.tv_nsec = 200000000};
+            (void)nanosleep(&delay, NULL);
+            if (clock_gettime_nsec_np(CLOCK_MONOTONIC_RAW) >= deadline) { timeout = 1; break; }
+            result = nil;
+            [remote fetchSupervisorProbeWithReply:complete];
+            timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
+            if (timeout != 0 || requestError) break;
+            BOOL lostConnection;
+            @synchronized (connectionState) { lostConnection = disconnected; }
+            if (lostConnection) {
+                requestError = [NSError errorWithDomain:@"VentilatorProbe" code:2
+                    userInfo:@{NSLocalizedDescriptionKey: @"Supervisor XPC connection was interrupted"}];
+                break;
+            }
+            if (!HelperSupervisorSameRunValid(started, result)) {
+                requestError = [NSError errorWithDomain:@"VentilatorProbe" code:1
+                    userInfo:@{NSLocalizedDescriptionKey: @"Supervisor connection lost or run identity changed"}];
+                break;
+            }
+        }
+    }
+    BOOL lostConnection;
+    @synchronized (connectionState) { lostConnection = disconnected; }
     [connection invalidate];
     if (timeout != 0) {
         throwFailure(environment, @"XPC request timed out");
@@ -147,6 +189,10 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
     }
     if (requestError) {
         throwFailure(environment, requestError.localizedDescription);
+        return nil;
+    }
+    if (hold && lostConnection) {
+        throwFailure(environment, @"Supervisor XPC connection was interrupted");
         return nil;
     }
     return result;
