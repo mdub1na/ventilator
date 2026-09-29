@@ -6,6 +6,8 @@
 
 This module is not linked into the current XPC daemon or writer CLI. It requires default SIGCHLD handling, no other child reaper and callbacks that do not spawn descendants. Direct fork callbacks are unsuitable for the current multithreaded daemon. A failed reap retains intent and prevents the next phase; real IOKit stalls, owner death, restart and hardware recovery remain unverified. See [the protocol](../../docs/features/worker-supervisor.md).
 
+The isolated supervisor now persists a child PID before granting execution over a private socket. A separate child thread exits its entire worker on parent EOF. An inherited exclusive lock and a check of the persisted PID prevent recovery while an old worker remains; recorded PIDs are never signalled, so reuse fails closed. `worker_supervisor_resume` performs recovery and a new minute only, dropping old lease memory. It rejects missing/corrupt records and unsafe files. Tests kill their own supervisor in all three phases; a stopped worker remains blocked until the test explicitly resumes its known descendant. The full suite now includes two real minute windows (about 2–3 minutes). This is still a user-process harness with fake hardware, outside the signed XPC daemon.
+
 ## XPC probes
 
 Run `make smoke` on macOS to start temporary **user** launchd services, request a fixed status from a separate process, and remove the services. No `sudo` or SMC access is used. The ad hoc `helper-status serve` command refuses to start as root.
