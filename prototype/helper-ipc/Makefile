@@ -27,7 +27,7 @@ supervisor-probe-test: HelperSupervisorValidationTest SupervisorProbeStorageTest
 	./HelperSupervisorValidationTest
 	./SupervisorProbeStorageTest
 	@test "$$(id -u)" != 0 || { echo "run the refusal test without sudo" >&2; exit 1; }; \
-	status=0; ./supervisor-probe >/dev/null 2>&1 || status=$$?; test "$$status" = 2; \
+	status=0; ./supervisor-probe >/dev/null 2>&1 || status=$$?; test "$$status" = 2 || exit 1; \
 	status=0; ./supervisor-probe --cleanup >/dev/null 2>&1 || status=$$?; test "$$status" = 2
 
 HelperSupervisorValidationTest: HelperSupervisorValidationTest.m HelperSupervisorValidation.h HelperStatus.h
