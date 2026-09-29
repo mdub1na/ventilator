@@ -118,7 +118,15 @@ date: 2026-09-23
 |---|---|---|
 | Изолированный C supervisor сохраняет журнал до `fork`, ограничивает каждый собственный процесс по `CLOCK_MONOTONIC_RAW`, требует его сбор до следующей фазы и перед очисткой проверяет новое полное окно в родителе. | `prototype/helper-ipc/WorkerSupervisor.c`, `prototype/helper-ipc/WorkerSupervisorTest.c`; [сценарии](../features/worker-supervisor.md), тесты пользовательских процессов на `Mac15,7`/macOS 27.0. | Это внешний процесс относительно подставного worker. В живой XPC daemon он не входит, аппаратные callbacks не подключены. `SIGSTOP` не моделирует зависание ядра; смерть самого supervisor не покрыта автоматическим восстановлением. Новая запись и завершение M2 этим не разрешаются. |
 
+### 1b. Потеря владельца supervisor — подставное оборудование
+
+| Основание | Источник проверки | Следствие |
+|---|---|---|
+| `flock` после `fork` имеет общие ссылки; явное `LOCK_UN` ребёнка сняло бы блокировку родителя. `_exit` закрывает дескрипторы, причём завершение может задерживаться. | Локальные `man 2 flock`, SDK macOS; [Apple flock](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/flock.2.html), [Apple exit](https://developer.apple.com/library/archive/documentation/System/Conceptual/ManPages_iPhoneOS/man2/_exit.2.html). | Код только закрывает lock, хранит PID до разрешения callback и при takeover дополнительно проверяет его отсутствие через публичный `proc_pidinfo/PROC_PIDTBSDINFO`. Любой живой, zombie, повторно использованный или неопределённый PID запрещает новое восстановление; ему не отправляется сигнал. |
+| В тестовой реализации смерть supervisor вызывает EOF в отдельном потоке worker; новый recovery-only владелец заново проходит окно наблюдения. Остановленный worker сохраняет владение и блокирует restart. | `prototype/helper-ipc/SupervisorOwnership.c`, `prototype/helper-ipc/WorkerSupervisorTest.c`; [протокол](../features/worker-supervisor.md), `Mac15,7`/macOS 27.0, пользовательские процессы с подставным backend. | Покрыта потеря тестового владельца в трёх фазах. В root daemon/SMC writer это не интегрировано; отмена уже принятой SMC команды, неостанавливаемый kernel call и полный reboot с журналом не проверены. M2 остаётся открытым. |
+
 ## 2. Решения на текущем этапе
+
 
 | Решение | Причина и отклонённая альтернатива | Цена / проверка |
 |---|---|---|

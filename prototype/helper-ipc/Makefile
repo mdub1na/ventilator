@@ -51,9 +51,9 @@ control-intent-test: ControlIntentJournalTest
 worker-supervisor-test: WorkerSupervisorTest
 	./WorkerSupervisorTest
 
-WorkerSupervisorTest: WorkerSupervisorTest.c WorkerSupervisor.c WorkerSupervisor.h ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
-	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \
-		WorkerSupervisorTest.c WorkerSupervisor.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
+WorkerSupervisorTest: WorkerSupervisorTest.c WorkerSupervisor.c WorkerSupervisor.h SupervisorOwnership.c SupervisorOwnership.h ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
+	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -pthread -framework IOKit \
+		WorkerSupervisorTest.c WorkerSupervisor.c SupervisorOwnership.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
 
 ControlIntentJournalTest: ControlIntentJournalTest.c ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
 	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \

@@ -1,9 +1,11 @@
 #include "WorkerSupervisor.h"
+#include "SupervisorOwnership.h"
 
 #include <errno.h>
 #include <fcntl.h>
 #include <limits.h>
 #include <string.h>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>
@@ -102,14 +104,42 @@ static bool wait_phase(pid_t child, uint64_t deadline, uint64_t reap_ns,
     }
 }
 
-static pid_t start_action(int directory_fd, int (*action)(void *), void *context,
-                           uint64_t deadline) {
+static pid_t spawn_worker(int directory_fd, uint64_t deadline, int *connection) {
+    int channel[2];
+    *connection = -1;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, channel) != 0) return -1;
+    if (fcntl(channel[0], F_SETFD, FD_CLOEXEC) != 0 ||
+        fcntl(channel[1], F_SETFD, FD_CLOEXEC) != 0) {
+        (void)close(channel[0]);
+        (void)close(channel[1]);
+        return -1;
+    }
     pid_t child = fork();
     if (child == 0) {
+        (void)close(channel[0]);
         (void)close(directory_fd);
-        if (now_ns() >= deadline) _exit(1);
-        _exit(action(context) == 0 ? 0 : 1);
+        supervisor_ownership_enter_child(channel[1], deadline);
+        return 0;
     }
+    (void)close(channel[1]);
+    if (child < 0) {
+        (void)close(channel[0]);
+        return child;
+    }
+    // No callback can begin before its PID has been durably recorded.
+    if (!supervisor_ownership_record(directory_fd, child) ||
+        send(channel[0], "G", 1, MSG_NOSIGNAL) != 1) {
+        (void)close(channel[0]);
+    } else {
+        *connection = channel[0];
+    }
+    return child;
+}
+
+static pid_t start_action(int directory_fd, int (*action)(void *), void *context,
+                           uint64_t deadline, int *connection) {
+    pid_t child = spawn_worker(directory_fd, deadline, connection);
+    if (child == 0) _exit(action(context) == 0 ? 0 : 1);
     return child;
 }
 
@@ -206,47 +236,28 @@ static bool supervise_observer(int input, pid_t child, ControlLease *lease,
     return false;
 }
 
-WorkerSupervisorReport worker_supervisor_run(
-    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
-    WorkerSupervisorLimits limits, const volatile sig_atomic_t *cancel) {
-    WorkerSupervisorReport report = {.result = SUPERVISOR_BLOCKED};
-    uint64_t deadline = 0;
-    uint64_t now = now_ns();
+static bool can_supervise(WorkerSupervisorBackend backend, WorkerSupervisorLimits limits) {
     struct sigaction child_action = {0};
-    if (lease == NULL || !limits_valid(limits) || backend.operate == NULL ||
-        backend.recover == NULL || backend.read == NULL ||
-        sigaction(SIGCHLD, NULL, &child_action) != 0 ||
-        child_action.sa_handler != SIG_DFL || (child_action.sa_flags & SA_NOCLDWAIT) != 0 ||
-        (cancel != NULL && *cancel != 0) || lease->state != CONTROL_LEASE_HELD ||
-        lease->owner == 0 || now < lease->last_sample_ns || now >= lease->expires_at_ns ||
-        now - lease->last_sample_ns > 2 * SECOND ||
-        !control_intent_mark_pending(directory_fd, lease)) return report;
-    uint64_t owner = lease->owner;
-    if (!control_lease_mark_write_pending(lease, owner, now_ns(), CONTROL_INTENT_PENDING)) {
-        control_lease_owner_lost(lease, owner);
-        return report;
-    }
-    if (deadline_for(limits.operation_ns, &deadline)) {
-        if (deadline > lease->expires_at_ns) deadline = lease->expires_at_ns;
-        report.operation_pid = start_action(directory_fd, backend.operate,
-                                             backend.context, deadline);
-        if (report.operation_pid > 0 &&
-            !wait_phase(report.operation_pid, deadline, limits.reap_ns, cancel,
-                         &report.operation, &report)) {
-            control_lease_owner_lost(lease, owner);
-            report.result = SUPERVISOR_STOP_FAILED;
-            return report;
-        }
-    }
-    control_lease_owner_lost(lease, owner);
+    return limits_valid(limits) && backend.recover != NULL && backend.read != NULL &&
+           sigaction(SIGCHLD, NULL, &child_action) == 0 &&
+           child_action.sa_handler == SIG_DFL && (child_action.sa_flags & SA_NOCLDWAIT) == 0;
+}
+
+static WorkerSupervisorReport recover_owned(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits, WorkerSupervisorReport report) {
+    uint64_t deadline = 0;
+    int connection = -1;
     report.result = SUPERVISOR_RECOVERY_FAILED;
     if (!deadline_for(limits.recovery_ns, &deadline)) return report;
     report.recovery_pid = start_action(directory_fd, backend.recover,
-                                        backend.context, deadline);
+                                        backend.context, deadline, &connection);
     if (report.recovery_pid <= 0) return report;
     WorkerExit recovery_exit = WORKER_NOT_STARTED;
-    if (!wait_phase(report.recovery_pid, deadline, limits.reap_ns, NULL,
-                     &recovery_exit, &report)) {
+    bool stopped = wait_phase(report.recovery_pid, deadline, limits.reap_ns, NULL,
+                               &recovery_exit, &report);
+    if (connection >= 0) (void)close(connection);
+    if (!stopped) {
         report.result = SUPERVISOR_STOP_FAILED;
         return report;
     }
@@ -266,9 +277,8 @@ WorkerSupervisorReport worker_supervisor_run(
         (void)close(channel[1]);
         return report;
     }
-    report.observer_pid = fork();
+    report.observer_pid = spawn_worker(directory_fd, deadline, &connection);
     if (report.observer_pid == 0) {
-        (void)close(directory_fd);
         (void)close(channel[0]);
         observe_child(channel[1], backend);
     }
@@ -277,11 +287,73 @@ WorkerSupervisorReport worker_supervisor_run(
         supervise_observer(channel[0], report.observer_pid, lease,
                             launched_ns, deadline, limits.reap_ns, &report);
     (void)close(channel[0]);
+    if (connection >= 0) (void)close(connection);
     if (verified && control_intent_clear_verified(directory_fd, lease)) {
         report.result = SUPERVISOR_RECOVERED;
     } else {
         // An uncollected observer must not leave a consumable proof in memory.
         control_lease_sleep(lease);
     }
+    return report;
+}
+
+static WorkerSupervisorReport run_owned(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits, const volatile sig_atomic_t *cancel) {
+    WorkerSupervisorReport report = {.result = SUPERVISOR_BLOCKED};
+    uint64_t deadline = 0;
+    uint64_t owner = lease->owner;
+    if (!control_intent_mark_pending(directory_fd, lease) ||
+        !control_lease_mark_write_pending(lease, owner, now_ns(), CONTROL_INTENT_PENDING)) {
+        control_lease_owner_lost(lease, owner);
+        return report;
+    }
+    if (deadline_for(limits.operation_ns, &deadline)) {
+        if (deadline > lease->expires_at_ns) deadline = lease->expires_at_ns;
+        int connection = -1;
+        report.operation_pid = start_action(directory_fd, backend.operate,
+                                             backend.context, deadline, &connection);
+        bool stopped = report.operation_pid <= 0 ||
+            wait_phase(report.operation_pid, deadline, limits.reap_ns, cancel,
+                        &report.operation, &report);
+        if (connection >= 0) (void)close(connection);
+        if (!stopped) {
+            control_lease_owner_lost(lease, owner);
+            report.result = SUPERVISOR_STOP_FAILED;
+            return report;
+        }
+    }
+    control_lease_owner_lost(lease, owner);
+    return recover_owned(directory_fd, lease, backend, limits, report);
+}
+
+WorkerSupervisorReport worker_supervisor_run(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits, const volatile sig_atomic_t *cancel) {
+    WorkerSupervisorReport blocked = {.result = SUPERVISOR_BLOCKED};
+    uint64_t now = now_ns();
+    if (lease == NULL || !can_supervise(backend, limits) || backend.operate == NULL ||
+        (cancel != NULL && *cancel != 0) || lease->state != CONTROL_LEASE_HELD ||
+        lease->owner == 0 || now < lease->last_sample_ns || now >= lease->expires_at_ns ||
+        now - lease->last_sample_ns > 2 * SECOND ||
+        control_intent_read(directory_fd) != CONTROL_INTENT_CLEAR) return blocked;
+    int owner_lock = supervisor_ownership_acquire(directory_fd, false);
+    if (owner_lock < 0) return blocked;
+    WorkerSupervisorReport report = run_owned(directory_fd, lease, backend, limits, cancel);
+    (void)close(owner_lock); // Workers keep their reference until actual exit.
+    return report;
+}
+
+WorkerSupervisorReport worker_supervisor_resume(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits) {
+    WorkerSupervisorReport blocked = {.result = SUPERVISOR_BLOCKED};
+    if (lease == NULL || !can_supervise(backend, limits) ||
+        control_intent_read(directory_fd) != CONTROL_INTENT_PENDING) return blocked;
+    control_lease_start(lease, CONTROL_INTENT_PENDING, SMC_BASELINE_READ_FAILED, NULL, now_ns());
+    int owner_lock = supervisor_ownership_acquire(directory_fd, true);
+    if (owner_lock < 0) return blocked;
+    WorkerSupervisorReport report = recover_owned(directory_fd, lease, backend, limits, blocked);
+    (void)close(owner_lock);
     return report;
 }

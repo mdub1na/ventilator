@@ -54,9 +54,18 @@ typedef struct {
 // before the next phase. Only the parent validates timed snapshots and consumes
 // the journal's recovery proof. Failure retains the pending marker. A caller
 // must also prohibit new work after STOP_FAILED (the child may still be alive).
-// The parent itself is not protected against SIGKILL or kernel/power failure.
+// Children hold an inherited owner lock and watch a private parent connection.
+// Loss of the parent exits the child's whole process; a restart checks the
+// durable child record and never sends signals to its possibly reused PID.
 WorkerSupervisorReport worker_supervisor_run(
     int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
     WorkerSupervisorLimits limits, const volatile sig_atomic_t *cancel);
+
+// Recovery-only restart for a valid pending journal. Acquires exclusive
+// ownership, refuses any recorded process still present, resets lease memory,
+// then performs recovery and a NEW complete observation. No operation is run.
+WorkerSupervisorReport worker_supervisor_resume(
+    int directory_fd, ControlLease *lease, WorkerSupervisorBackend backend,
+    WorkerSupervisorLimits limits);
 
 #endif
