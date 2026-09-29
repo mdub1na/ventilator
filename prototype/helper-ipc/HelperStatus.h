@@ -7,6 +7,9 @@
 - (void)fetchStartupAuditWithReply:(void (^)(NSDictionary<NSString *, id> *audit))reply;
 - (void)startBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
 - (void)fetchBaselineWatchWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
+- (void)startSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
+- (void)fetchSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
+- (void)cleanupSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *status))reply;
 @end
 
 static const NSInteger HelperStatusProtocolVersion = 1;

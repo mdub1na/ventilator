@@ -43,6 +43,18 @@ object HelperProbeCommand {
                     println(native.startupAuditNative())
                     0
                 }
+                "--helper-supervisor-start" -> {
+                    println(native.startSupervisorNative())
+                    0
+                }
+                "--helper-supervisor-status" -> {
+                    println(native.supervisorStatusNative())
+                    0
+                }
+                "--helper-supervisor-cleanup" -> {
+                    println(native.cleanupSupervisorNative())
+                    0
+                }
                 "--helper-unregister" -> {
                     val status = native.registrationStatusNative()
                     if (status != "notRegistered" && status != "notFound") native.setRegisteredNative(false)
@@ -70,4 +82,7 @@ internal class HelperProbeNative(path: Path) {
     external fun startWatchNative(): String
     external fun watchStatusNative(): String
     external fun startupAuditNative(): String
+    external fun startSupervisorNative(): String
+    external fun supervisorStatusNative(): String
+    external fun cleanupSupervisorNative(): String
 }

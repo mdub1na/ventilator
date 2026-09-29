@@ -2,6 +2,7 @@
 #import "HelperBaselineValidation.h"
 #import "HelperWatchValidation.h"
 #import "HelperStartupAuditValidation.h"
+#import "HelperSupervisorValidation.h"
 #import <Security/Security.h>
 #import <ServiceManagement/ServiceManagement.h>
 #include <jni.h>
@@ -93,6 +94,9 @@ typedef enum {
     DaemonRequestWatchStart,
     DaemonRequestWatchStatus,
     DaemonRequestStartupAudit,
+    DaemonRequestSupervisorStart,
+    DaemonRequestSupervisorStatus,
+    DaemonRequestSupervisorCleanup,
 } DaemonRequest;
 
 static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequest request) {
@@ -127,6 +131,9 @@ static NSDictionary<NSString *, id> *fetchDaemon(JNIEnv *environment, DaemonRequ
         case DaemonRequestWatchStart: [remote startBaselineWatchWithReply:complete]; break;
         case DaemonRequestWatchStatus: [remote fetchBaselineWatchWithReply:complete]; break;
         case DaemonRequestStartupAudit: [remote fetchStartupAuditWithReply:complete]; break;
+        case DaemonRequestSupervisorStart: [remote startSupervisorProbeWithReply:complete]; break;
+        case DaemonRequestSupervisorStatus: [remote fetchSupervisorProbeWithReply:complete]; break;
+        case DaemonRequestSupervisorCleanup: [remote cleanupSupervisorProbeWithReply:complete]; break;
     }
     long timeout = dispatch_semaphore_wait(done, dispatch_time(DISPATCH_TIME_NOW, 5 * NSEC_PER_SEC));
     [connection invalidate];
@@ -228,4 +235,27 @@ JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_start
         }
         return encodeResult(environment, result);
     }
+}
+
+static jstring requestSupervisor(JNIEnv *environment, DaemonRequest request) {
+    NSDictionary *result = fetchDaemon(environment, request);
+    if (!result) return NULL;
+    if (!HelperSupervisorResponseValid(result)) {
+        throwFailure(environment, @"XPC supervisor contract mismatch");
+        return NULL;
+    }
+    return encodeResult(environment, result);
+}
+
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_startSupervisorNative(JNIEnv *environment, jobject self) {
+    (void)self;
+    @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorStart); }
+}
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_supervisorStatusNative(JNIEnv *environment, jobject self) {
+    (void)self;
+    @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorStatus); }
+}
+JNIEXPORT jstring JNICALL Java_ventilator_desktop_helper_HelperProbeNative_cleanupSupervisorNative(JNIEnv *environment, jobject self) {
+    (void)self;
+    @autoreleasepool { return requestSupervisor(environment, DaemonRequestSupervisorCleanup); }
 }

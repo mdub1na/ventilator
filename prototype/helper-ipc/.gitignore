@@ -12,3 +12,6 @@
 /WorkerSupervisorTest
 /ControlLeaseTest
 /ControlIntentJournalTest
+/supervisor-probe
+/HelperSupervisorValidationTest
+/SupervisorProbeStorageTest

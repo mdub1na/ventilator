@@ -36,8 +36,8 @@ typedef struct ControlLease {
     bool recovery_verified;
 } ControlLease;
 
-// This reducer has no SMC writer and is not linked into the read-only daemon.
-// The capability argument exists only for simulated future integration.
+// This reducer has no SMC writer. The read-only supervisor executable uses it
+// only for check-only callbacks; its capability never authorizes SMC writes.
 void control_lease_start(ControlLease *lease, ControlIntentStatus intent,
                          SmcBaselineResult result,
                          const SmcBaselineSnapshot *snapshot, uint64_t now_ns);

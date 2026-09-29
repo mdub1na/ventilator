@@ -24,7 +24,7 @@ make report
 - [x] [research-architecture](research/research-architecture.md) — возможность Kotlin/KMP приложения, аппаратные ограничения и архитектурные риски.
 - [x] [research-helper-boundary](research/research-helper-boundary.md) — проверенные свойства macOS и граница read-only helper для M2-02; аппаратное восстановление ещё не реализовано.
 
-### Features (10)
+### Features (11)
 
 - [x] [monitoring-readings](features/monitoring-readings.md) — проверенная модель снимка вентиляторов и температуры для локального прототипа.
 - [x] [login-at-startup](features/login-at-startup.md) — системная регистрация автозапуска и переходы к настройке.
@@ -34,9 +34,10 @@ make report
 - [x] [helper-status-ipc](features/helper-status-ipc.md) — пользовательский XPC обмен фиксированным read-only статусом и удаление временной службы.
 - [x] [helper-baseline-watch](features/helper-baseline-watch.md) — минутное read-only наблюдение в UID 0 helper после выхода клиента, проверенное на `Mac15,7`.
 - [x] [helper-startup-audit](features/helper-startup-audit.md) — отдельное фиксированное чтение до XPC listener при каждом запуске helper, проверенное после перезапуска на `Mac15,7`.
-- [ ] [helper-control-lease](features/helper-control-lease.md) — изолированная модель владения будущей пробой управления; переходы проверены unit-тестами, интеграция и аппаратная проверка открыты.
+- [ ] [helper-control-lease](features/helper-control-lease.md) — модель владения будущей пробой управления; переходы и read-only root цикл проверены, интеграция writer и аппаратная проверка открыты.
 
 - [x] [worker-supervisor](features/worker-supervisor.md) — отдельный процесс контролирует сроки, сбор worker и новый recovery proof; проверено с подставным оборудованием.
+- [x] [helper-supervisor-probe](features/helper-supervisor-probe.md) — подписанный executable из root helper с фиксированным read-only backend; две независимые минуты, сбор процессов и удаление состояния проверены на `Mac15,7`.
 
 ### Screens / Flows (2)
 
