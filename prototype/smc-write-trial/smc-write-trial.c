@@ -171,7 +171,7 @@ static uint32_t little32(const uint8_t *bytes) {
 
 static double monotonic_seconds(void) {
     struct timespec value = {0};
-    if (clock_gettime(CLOCK_MONOTONIC, &value) != 0) return -1.0;
+    if (clock_gettime(CLOCK_MONOTONIC_RAW, &value) != 0) return -1.0;
     return (double)value.tv_sec + (double)value.tv_nsec / 1000000000.0;
 }
 
@@ -818,9 +818,7 @@ typedef struct {
 static bool baseline_observer_read(void *context, TrialObservation *observation) {
     BaselineObserverContext *observer = context;
     LiveSnapshot snapshot = {0};
-    observer->sample_time = monotonic_seconds();
-    if (observer->sample_time < 0 ||
-        !read_snapshot(observer->smc, &snapshot, true, true) ||
+    if (!read_snapshot(observer->smc, &snapshot, true, true) ||
         !read_ui8_exact(&snapshot.ftst, &observation->ftst)) return false;
     for (unsigned fan = 0; fan < TRIAL_FAN_COUNT; ++fan) {
         if (!read_ui8_exact(&snapshot.fans[fan].mode, &observation->mode[fan]) ||
@@ -830,6 +828,7 @@ static bool baseline_observer_read(void *context, TrialObservation *observation)
     memcpy(observation->temperatures_c, snapshot.temperatures_c,
            sizeof(observation->temperatures_c));
     observation->metrics_available = true;
+    observer->sample_time = monotonic_seconds();
     return true;
 }
 
@@ -874,6 +873,7 @@ static int run_observe_baseline(Smc *smc) {
         .read_observation = baseline_observer_read,
         .wait_milliseconds = baseline_observer_wait,
         .should_stop = baseline_observer_stopped,
+        .monotonic_seconds = backend_now,
         .record_observation = baseline_observer_record,
     };
     TrialBaselineResult result = trial_observe_baseline_window(
@@ -887,6 +887,7 @@ static int run_observe_baseline(Smc *smc) {
                          result.status == TRIAL_BASELINE_READ_FAILED ? "read_failed" :
                          result.status == TRIAL_BASELINE_WAIT_FAILED ? "wait_failed" :
                          result.status == TRIAL_BASELINE_INTERRUPTED ? "interrupted" :
+                         result.status == TRIAL_BASELINE_TIMING_FAILED ? "timing_failed" :
                          "internal_error";
     printf("{\"event\":\"alert\",\"second\":%u,\"reason\":\"%s\"}\n",
            result.second, reason);

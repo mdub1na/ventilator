@@ -42,6 +42,8 @@ typedef struct {
     bool (*read_observation)(void *context, TrialObservation *output);
     bool (*wait_milliseconds)(void *context, unsigned milliseconds);
     bool (*should_stop)(void *context);
+    // This clock must advance during sleep as well as normal execution.
+    double (*monotonic_seconds)(void *context);
     void (*record_observation)(void *context, unsigned second,
                                const TrialObservation *observation);
 } TrialBaselineObserver;
@@ -52,6 +54,7 @@ typedef enum {
     TRIAL_BASELINE_READ_FAILED,
     TRIAL_BASELINE_WAIT_FAILED,
     TRIAL_BASELINE_INTERRUPTED,
+    TRIAL_BASELINE_TIMING_FAILED,
     TRIAL_BASELINE_INVALID,
 } TrialBaselineStatus;
 

@@ -46,12 +46,25 @@ bool trial_observation_is_baseline(const TrialObservation *observation) {
     return true;
 }
 
+static bool read_timing_valid(double started, double finished) {
+    return isfinite(started) && started >= 0.0 && isfinite(finished) &&
+           finished >= started && finished - started <= 5.0;
+}
+
+static bool sample_timing_valid(double previous, double started, double finished) {
+    return read_timing_valid(started, finished) && started >= previous &&
+           finished - previous >= 0.9 && finished - previous <= 5.0;
+}
+
 TrialBaselineResult trial_observe_baseline_window(
     TrialBaselineObserver *observer, unsigned last_second) {
     TrialBaselineResult result = {.status = TRIAL_BASELINE_INVALID};
     if (observer == NULL || observer->read_observation == NULL ||
         observer->wait_milliseconds == NULL || observer->should_stop == NULL ||
-        observer->record_observation == NULL) return result;
+        observer->monotonic_seconds == NULL || observer->record_observation == NULL) return result;
+
+    double window_started = 0.0;
+    double previous_sample = 0.0;
 
     for (unsigned second = 0; ; ++second) {
         result.second = second;
@@ -60,10 +73,23 @@ TrialBaselineResult trial_observe_baseline_window(
             return result;
         }
         TrialObservation observation = {0};
+        double read_started = observer->monotonic_seconds(observer->context);
+        if (!isfinite(read_started) || read_started < 0.0) {
+            result.status = TRIAL_BASELINE_TIMING_FAILED;
+            return result;
+        }
         if (!observer->read_observation(observer->context, &observation)) {
             result.status = TRIAL_BASELINE_READ_FAILED;
             return result;
         }
+        double sampled = observer->monotonic_seconds(observer->context);
+        if (!(second == 0 ? read_timing_valid(read_started, sampled) :
+                           sample_timing_valid(previous_sample, read_started, sampled))) {
+            result.status = TRIAL_BASELINE_TIMING_FAILED;
+            return result;
+        }
+        if (second == 0) window_started = sampled;
+        previous_sample = sampled;
         ++result.samples;
         if (observer->should_stop(observer->context)) {
             result.status = TRIAL_BASELINE_INTERRUPTED;
@@ -79,7 +105,8 @@ TrialBaselineResult trial_observe_baseline_window(
             return result;
         }
         if (second == last_second) {
-            result.status = TRIAL_BASELINE_STABLE;
+            result.status = sampled - window_started >= (double)last_second ?
+                            TRIAL_BASELINE_STABLE : TRIAL_BASELINE_TIMING_FAILED;
             return result;
         }
         if (!observer->wait_milliseconds(observer->context, 1000)) {
@@ -158,7 +185,7 @@ bool trial_restore_unlock(TrialBackend *backend) {
     if (backend == NULL || backend->write_ftst == NULL ||
         backend->write_mode == NULL || backend->write_target == NULL ||
         backend->read_observation == NULL || backend->wait_milliseconds == NULL ||
-        backend->should_stop == NULL) return false;
+        backend->monotonic_seconds == NULL || backend->should_stop == NULL) return false;
 
     TrialObservation current = {0};
     bool read_ok = false;
@@ -257,25 +284,42 @@ bool trial_restore_unlock(TrialBackend *backend) {
 
     // A single baseline read after an accepted Ftst write was misleading on
     // Mac15,7. Require an uninterrupted minute, allowing 30 s for takeover.
-    unsigned stable_seconds = 0;
+    unsigned stable_samples = 0;
+    double stable_started = 0.0;
+    double previous_sample = 0.0;
+    bool have_previous_sample = false;
     for (unsigned second = 0; second <= FTST_BASELINE_WAIT_SECONDS; ++second) {
         TrialObservation observation = {0};
+        double read_started = backend->monotonic_seconds(backend->context);
         if (!backend->read_observation(backend->context, false, &observation) ||
             observation.ftst != 0 || !modes_released(&observation)) return false;
+        double sampled = backend->monotonic_seconds(backend->context);
+        if (!(have_previous_sample ? sample_timing_valid(previous_sample, read_started, sampled) :
+                                     read_timing_valid(read_started, sampled))) return false;
+        previous_sample = sampled;
+        have_previous_sample = true;
         note_fan_state(backend, &observation);
         if (backend->record_observation != NULL) {
             backend->record_observation(backend->context, second, &observation);
         }
-        stable_seconds = trial_observation_is_baseline(&observation) ?
-                         stable_seconds + 1 : 0;
-        if (stable_seconds > FTST_BASELINE_STABLE_SECONDS) return !delayed_change;
+        if (trial_observation_is_baseline(&observation)) {
+            if (stable_samples == 0) stable_started = sampled;
+            ++stable_samples;
+        } else {
+            stable_samples = 0;
+        }
+        if (stable_samples > FTST_BASELINE_STABLE_SECONDS &&
+            sampled - stable_started >= FTST_BASELINE_STABLE_SECONDS) return !delayed_change;
         // Only a fully released pair may receive this one-shot fallback. A
         // fan already in system mode might have a legitimate nonzero target.
         if (second == FTST_POST_CLEAR_FALLBACK_SECONDS &&
             observation.mode[0] == 0 && observation.mode[1] == 0) {
             (void)trial_restore_system(backend);
             // Even a successful local read is not proof of a lasting return.
-            // Continue the outer minute-long observation either way.
+            // Start a fresh observation after this explicit recovery attempt;
+            // the time spent performing recovery is not a baseline interval.
+            stable_samples = 0;
+            have_previous_sample = false;
         }
         if (second < FTST_BASELINE_WAIT_SECONDS &&
             !backend->wait_milliseconds(backend->context, 1000)) return false;
@@ -304,6 +348,11 @@ static bool trial_backend_observer_stopped(void *context) {
     return backend->should_stop(backend->context);
 }
 
+static double trial_backend_observer_now(void *context) {
+    TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
+    return backend->monotonic_seconds(backend->context);
+}
+
 static void trial_backend_observer_record(
     void *context, unsigned second, const TrialObservation *observation) {
     TrialBackend *backend = ((TrialBackendObserverContext *)context)->backend;
@@ -319,6 +368,7 @@ static TrialBaselineResult trial_observe_after_ftst(TrialBackend *backend) {
         .read_observation = trial_backend_observer_read,
         .wait_milliseconds = trial_backend_observer_wait,
         .should_stop = trial_backend_observer_stopped,
+        .monotonic_seconds = trial_backend_observer_now,
         .record_observation = trial_backend_observer_record,
     };
     return trial_observe_baseline_window(&observer, FTST_BASELINE_STABLE_SECONDS);
