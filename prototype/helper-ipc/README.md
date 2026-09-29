@@ -108,4 +108,6 @@ Before removing the temporary registration or package, run:
 ./integrated-probe.sh cleanup "$APP"
 ```
 
-Cleanup refuses a running probe, pending intent or live/uncertain recorded worker. It deletes only the fixed private root diagnostic state after those guards pass. Never delete its state to bypass an error. Restore the prior background switch after removal. The read-only runner may outlive a daemon crash; this integration does not yet bind a future writer to daemon/client lifetime or provide a production reboot journal. See the [protocol and evidence](../../docs/features/helper-supervisor-probe.md).
+The daemon stages a bounded copy of the sibling executable in root-owned `0700` storage under `/private/var/db`, then verifies the copied signature before executing its `0500` file. This prevents user-owned bundle replacement between validation and launch. The signature smoke also validates copied bytes in disposable user-owned fixtures, without executing them.
+
+Cleanup refuses a running probe, pending intent or live/uncertain recorded worker. It deletes only the fixed private root diagnostic state and staged executable after those guards pass. Never delete its state to bypass an error. Restore the prior background switch after removal. The read-only runner may outlive a daemon crash; this integration does not yet bind a future writer to daemon/client lifetime or establish production recovery through reboot. See the [protocol and evidence](../../docs/features/helper-supervisor-probe.md).

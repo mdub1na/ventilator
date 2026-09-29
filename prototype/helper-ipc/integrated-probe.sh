@@ -214,7 +214,7 @@ case "$action" in
         pid=$(printf '%s\n' "$status" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
         is_uint "$pid" && [ "$pid" -gt 0 ] || { echo "runner PID missing" >&2; exit 1; }
         [ "$(ps -p "$pid" -o uid= | tr -d ' ')" = 0 ] || { echo "runner is not UID 0" >&2; exit 1; }
-        [ "$(ps -p "$pid" -o comm=)" = "$app/Contents/Resources/supervisor-probe" ] || { echo "runner path differs" >&2; exit 1; }
+        [ "$(ps -p "$pid" -o comm=)" = /private/var/db/com.ventilator.supervisor-read-only/supervisor-executable-v1 ] || { echo "runner path differs" >&2; exit 1; }
         echo "supervisor-process=verified uid=0 pid=$pid"
         ;;
     supervisor-status)
@@ -524,7 +524,7 @@ case "$action" in
                 *) echo "run supervisor-cleanup and confirm cleaned before unregister: $supervisor" >&2; exit 1 ;;
             esac
         fi
-        [ ! -d /private/var/run/com.ventilator.supervisor-read-only ] || {
+        [ ! -d /private/var/db/com.ventilator.supervisor-read-only ] || {
             echo "root probe state remains; enable the daemon and run supervisor-cleanup before unregister" >&2
             exit 1
         }
@@ -536,7 +536,7 @@ case "$action" in
         ;;
     cleanup)
         require_app "$@"
-        [ ! -d /private/var/run/com.ventilator.supervisor-read-only ] || {
+        [ ! -d /private/var/db/com.ventilator.supervisor-read-only ] || {
             echo "root probe state remains; use supervisor-cleanup before deleting the package" >&2
             exit 1
         }

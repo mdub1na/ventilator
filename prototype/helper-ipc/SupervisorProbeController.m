@@ -1,6 +1,7 @@
 #import "SupervisorProbeController.h"
 #import "HelperSupervisorValidation.h"
 #import <Security/Security.h>
+#include "SupervisorProbeDirectory.h"
 #include <mach-o/dyld.h>
 #include <limits.h>
 #include <stdlib.h>
@@ -16,7 +17,7 @@
 
 // Resolves only the sibling of this daemon, then pins Apple anchor, identifier
 // and the daemon's own Team ID. The XPC caller cannot supply a path or arguments.
-NSURL *SupervisorProbeRunnerURL(void) {
+static NSString *ownTeamID(void) {
     SecCodeRef selfCode = NULL;
     CFDictionaryRef info = NULL;
     if (SecCodeCopySelf(kSecCSDefaultFlags, &selfCode) != errSecSuccess) return nil;
@@ -27,12 +28,12 @@ NSURL *SupervisorProbeRunnerURL(void) {
     CFRelease(selfCode);
     if (team.length != 10 || [team rangeOfCharacterFromSet:
         [[NSCharacterSet characterSetWithCharactersInString:@"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789"] invertedSet]].location != NSNotFound) return nil;
-    char executable[PATH_MAX], canonical[PATH_MAX];
-    uint32_t size = sizeof(executable);
-    if (_NSGetExecutablePath(executable, &size) != 0 || !realpath(executable, canonical)) return nil;
-    NSString *path = [[NSString stringWithUTF8String:canonical].stringByDeletingLastPathComponent
-        stringByAppendingPathComponent:@"supervisor-probe"];
-    NSURL *url = [NSURL fileURLWithPath:path];
+    return team;
+}
+
+static BOOL validSignature(NSURL *url) {
+    NSString *team = ownTeamID();
+    if (!team) return NO;
     NSString *rule = [NSString stringWithFormat:
         @"anchor apple generic and identifier \"com.ventilator.helper-ipc.signed-supervisor\" and certificate leaf[subject.OU] = \"%@\"", team];
     SecRequirementRef requirement = NULL;
@@ -42,7 +43,83 @@ NSURL *SupervisorProbeRunnerURL(void) {
         SecStaticCodeCheckValidity(code, kSecCSStrictValidate | kSecCSCheckAllArchitectures, requirement) == errSecSuccess;
     if (code) CFRelease(code);
     if (requirement) CFRelease(requirement);
-    return valid ? url : nil;
+    return valid;
+}
+
+static NSURL *siblingRunnerURL(void) {
+    char executable[PATH_MAX], canonical[PATH_MAX];
+    uint32_t size = sizeof(executable);
+    if (_NSGetExecutablePath(executable, &size) != 0 || !realpath(executable, canonical)) return nil;
+    NSString *path = [[NSString stringWithUTF8String:canonical].stringByDeletingLastPathComponent
+        stringByAppendingPathComponent:@"supervisor-probe"];
+    return [NSURL fileURLWithPath:path];
+}
+
+NSURL *SupervisorProbeRunnerURL(void) {
+    NSURL *url = siblingRunnerURL();
+    return url && validSignature(url) ? url : nil;
+}
+
+static NSURL *stageRunner(NSURL *sourceURL, int directory, NSURL *directoryURL) {
+    // The app bundle is user owned. Verify COPIED bytes inside root-owned 0700
+    // storage before exec so replacing the source after checking cannot replace
+    // code that NSTask will execute with root privileges.
+    struct stat folder = {0};
+    if (!sourceURL || fstat(directory, &folder) != 0 || !S_ISDIR(folder.st_mode) ||
+        folder.st_uid != geteuid() || (folder.st_mode & 0777) != 0700) return nil;
+    int source = open(sourceURL.fileSystemRepresentation, O_RDONLY | O_NOFOLLOW | O_CLOEXEC);
+    struct stat info = {0};
+    if (source < 0) return nil;
+    if (fstat(source, &info) != 0 || !S_ISREG(info.st_mode) || info.st_size <= 0 || info.st_size > 8 * 1024 * 1024) {
+        close(source); return nil;
+    }
+    int output = openat(directory, SupervisorProbeStagingName, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    BOOL copied = output >= 0;
+    off_t remaining = info.st_size;
+    char buffer[16384];
+    while (copied && remaining > 0) {
+        ssize_t count = read(source, buffer, remaining < (off_t)sizeof(buffer) ? (size_t)remaining : sizeof(buffer));
+        if (count < 0 && errno == EINTR) continue;
+        if (count <= 0) { copied = NO; break; }
+        remaining -= count;
+        ssize_t written = 0;
+        while (written < count) {
+            ssize_t chunk = write(output, buffer + written, (size_t)(count - written));
+            if (chunk < 0 && errno == EINTR) continue;
+            if (chunk <= 0) { copied = NO; break; }
+            written += chunk;
+        }
+    }
+    copied = copied && fchmod(output, 0500) == 0 && fsync(output) == 0;
+    if (output >= 0 && close(output) != 0) copied = NO;
+    close(source);
+    NSString *path = directoryURL.path;
+    NSURL *staged = [NSURL fileURLWithPath:[path stringByAppendingPathComponent:
+        [NSString stringWithUTF8String:SupervisorProbeStagingName]]];
+    BOOL trusted = copied && validSignature(staged);
+    NSURL *runner = nil;
+    if (trusted && renameat(directory, SupervisorProbeStagingName, directory, SupervisorProbeExecutableName) == 0 && fsync(directory) == 0)
+        runner = [NSURL fileURLWithPath:[path stringByAppendingPathComponent:
+            [NSString stringWithUTF8String:SupervisorProbeExecutableName]]];
+    if (output >= 0) (void)unlinkat(directory, SupervisorProbeStagingName, 0);
+    return runner;
+}
+
+BOOL SupervisorProbeCopySignatureCheck(void) {
+    // Fixed signature-only diagnostic: a disposable owned fixture, no exec,
+    // no root state and no caller-supplied path. Exercises validation AFTER copy.
+    char path[] = "/private/tmp/ventilator-supervisor-copy-test.XXXXXX";
+    if (!mkdtemp(path)) return NO;
+    int directory = open(path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    BOOL valid = directory >= 0 && stageRunner(siblingRunnerURL(), directory,
+        [NSURL fileURLWithPath:[NSString stringWithUTF8String:path]]) != nil;
+    if (directory >= 0) {
+        (void)unlinkat(directory, SupervisorProbeExecutableName, 0);
+        (void)unlinkat(directory, SupervisorProbeStagingName, 0);
+        (void)close(directory);
+    }
+    if (rmdir(path) != 0) valid = NO;
+    return valid;
 }
 
 @implementation SupervisorProbeController
@@ -79,6 +156,12 @@ NSURL *SupervisorProbeRunnerURL(void) {
         return [self statusLocked];
     }
     NSURL *runner = SupervisorProbeRunnerURL();
+    if (runner) {
+        int directory = SupervisorProbeOpenDirectory();
+        runner = directory >= 0 ? stageRunner(runner, directory,
+            [NSURL fileURLWithPath:[NSString stringWithUTF8String:SupervisorProbeDirectoryPath]]) : nil;
+        if (directory >= 0) close(directory);
+    }
     if (!runner) {
         _state = @"failed"; _reason = @"signature";
         return [self statusLocked];

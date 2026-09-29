@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include "SupervisorProbeStorage.h"
 #include "SupervisorOwnership.h"
+#include "SupervisorProbeDirectory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <sys/file.h>
@@ -29,7 +30,8 @@ bool supervisor_probe_cleanup(int directory_fd) {
     // worker, pending intent or uncertain record prohibits removing state.
     int ownership = supervisor_ownership_acquire(directory_fd, false);
     if (ownership < 0) return false;
-    const char *files[] = {"supervisor-worker.next", "supervisor-worker-v1", "supervisor-owner-v1"};
+    const char *files[] = {"supervisor-worker.next", "supervisor-worker-v1", "supervisor-owner-v1",
+                          SupervisorProbeExecutableName, SupervisorProbeStagingName};
     bool removed = true;
     for (unsigned index = 0; index < sizeof(files) / sizeof(files[0]); ++index) {
         if (unlinkat(directory_fd, files[index], 0) != 0 && errno != ENOENT) removed = false;

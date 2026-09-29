@@ -1,6 +1,7 @@
 #include <stdbool.h>
 #include "WorkerSupervisor.h"
 #include "SupervisorProbeStorage.h"
+#include "SupervisorProbeDirectory.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -9,7 +10,6 @@
 #include <time.h>
 #include <unistd.h>
 
-static const char directory_path[] = "/private/var/run/com.ventilator.supervisor-read-only";
 static const uint64_t SECOND = UINT64_C(1000000000);
 
 static SmcBaselineResult read_baseline(void *context, SmcBaselineSnapshot *snapshot) {
@@ -36,8 +36,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     umask(0077);
-    if (mkdir(directory_path, 0700) != 0 && errno != EEXIST) return 2;
-    int directory = open(directory_path, O_RDONLY | O_DIRECTORY | O_NOFOLLOW | O_CLOEXEC);
+    int directory = SupervisorProbeOpenDirectory();
     int lock = directory >= 0 ? supervisor_probe_lock(directory) : -1;
     if (lock < 0) {
         if (directory >= 0) (void)close(directory);
@@ -46,7 +45,7 @@ int main(int argc, char **argv) {
     }
     if (cleanup) {
         bool clean = supervisor_probe_cleanup(directory);
-        if (clean) clean = unlinkat(directory, "probe-launch-v1", 0) == 0 && rmdir(directory_path) == 0;
+        if (clean) clean = unlinkat(directory, "probe-launch-v1", 0) == 0 && rmdir(SupervisorProbeDirectoryPath) == 0;
         (void)close(lock);
         (void)close(directory);
         if (clean) puts("{\"cleaned\":true}");

@@ -15,15 +15,20 @@ cp supervisor-probe "$scratch/supervisor-probe"
 codesign --force --sign "$identity" --timestamp=none \
     --identifier com.ventilator.helper-ipc.signed-supervisor "$scratch/supervisor-probe"
 "$scratch/daemon-status" --probe-signature-check
+"$scratch/daemon-status" --probe-copy-signature-check
 codesign --force --sign "$identity" --timestamp=none \
     --identifier com.ventilator.helper-ipc.other-supervisor "$scratch/supervisor-probe"
 if "$scratch/daemon-status" --probe-signature-check; then echo "wrong identifier accepted" >&2; exit 1; fi
+if "$scratch/daemon-status" --probe-copy-signature-check; then echo "wrong copied identifier accepted" >&2; exit 1; fi
 codesign --force --sign - --identifier com.ventilator.helper-ipc.signed-supervisor "$scratch/supervisor-probe"
 if "$scratch/daemon-status" --probe-signature-check; then echo "ad hoc signature accepted" >&2; exit 1; fi
+if "$scratch/daemon-status" --probe-copy-signature-check; then echo "copied ad hoc signature accepted" >&2; exit 1; fi
 codesign --force --sign "$identity" --timestamp=none \
     --identifier com.ventilator.helper-ipc.signed-supervisor "$scratch/supervisor-probe"
 printf 'tampered' >>"$scratch/supervisor-probe"
 if "$scratch/daemon-status" --probe-signature-check; then echo "tampered executable accepted" >&2; exit 1; fi
+if "$scratch/daemon-status" --probe-copy-signature-check; then echo "tampered copy accepted" >&2; exit 1; fi
 rm "$scratch/supervisor-probe"
 if "$scratch/daemon-status" --probe-signature-check; then echo "missing executable accepted" >&2; exit 1; fi
+if "$scratch/daemon-status" --probe-copy-signature-check; then echo "missing copy accepted" >&2; exit 1; fi
 echo "supervisor-signature=verified accepted=trusted rejected=wrong-identifier,ad-hoc,tampered,missing; no task launched"
