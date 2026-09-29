@@ -1,5 +1,13 @@
 # Read-only XPC status probe
 
+## Isolated worker supervisor (no hardware backend)
+
+`make worker-supervisor-test` runs a single-threaded parent with three distinct child phases: operation, recovery, and baseline reading. The parent persists intent before the first fork, bounds each phase with the raw monotonic clock, kills and reaps its own stalled children, and validates a fresh 61-sample, 60-second window before clearing intent. Tests use fake hardware only and require no sudo, daemon registration or SMC access. The full suite takes about a minute; `./WorkerSupervisorTest --fast` runs failure cases only.
+
+This module is not linked into the current XPC daemon or writer CLI. It requires default SIGCHLD handling, no other child reaper and callbacks that do not spawn descendants. Direct fork callbacks are unsuitable for the current multithreaded daemon. A failed reap retains intent and prevents the next phase; real IOKit stalls, owner death, restart and hardware recovery remain unverified. See [the protocol](../../docs/features/worker-supervisor.md).
+
+## XPC probes
+
 Run `make smoke` on macOS to start temporary **user** launchd services, request a fixed status from a separate process, and remove the services. No `sudo` or SMC access is used. The ad hoc `helper-status serve` command refuses to start as root.
 
 The ad hoc status server returns protocol version `1`, `read_only_prototype`, and false values for SMC access and write availability. It answers the no-argument `fetchBaselineWithReply` method with `unsupported_provider`; only the signed daemon implements the fixed-key SMC read. The client rejects a different response or a five-second timeout.

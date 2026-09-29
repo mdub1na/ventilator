@@ -35,6 +35,7 @@ make -C prototype/helper-ipc smoke
 make -C prototype/helper-ipc package-smoke
 make -C prototype/helper-ipc control-lease-test
 make -C prototype/helper-ipc control-intent-test
+make -C prototype/helper-ipc worker-supervisor-test
 ```
 
 Сборка и тесты `smc-write-trial` не требуют записи в SMC. Не запускайте его команды `--apply` как обычную проверку PR. После [аппаратных проб `Ftst`](docs/features/ftst-check-trial.md) прямой writer, все формы `ftst-check` с записью и использованная `ftst-minimum --apply-reviewed` заблокированы до открытия SMC, включая вызов из прежнего supervised-сценария. Следующая запись требует нового протокола, ревью и решения пользователя; прямая проба и её исходный допуск записаны в [отдельном протоколе](docs/features/manual-fan-control-trial.md). Команды восстановления остаются аварийными и не входят в тесты.

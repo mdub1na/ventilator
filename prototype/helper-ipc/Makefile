@@ -2,7 +2,7 @@ CC ?= clang
 CFLAGS = -fobjc-arc -Wall -Wextra -Werror -O2
 JDK_HOME = $(shell /usr/libexec/java_home -v 25)
 
-.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test
+.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test worker-supervisor-test
 
 build: helper-status
 
@@ -48,6 +48,13 @@ ControlLeaseTest: ControlLeaseTest.c ControlLease.c ControlLease.h ControlIntent
 control-intent-test: ControlIntentJournalTest
 	./ControlIntentJournalTest
 
+worker-supervisor-test: WorkerSupervisorTest
+	./WorkerSupervisorTest
+
+WorkerSupervisorTest: WorkerSupervisorTest.c WorkerSupervisor.c WorkerSupervisor.h ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
+	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \
+		WorkerSupervisorTest.c WorkerSupervisor.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
+
 ControlIntentJournalTest: ControlIntentJournalTest.c ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
 	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -framework IOKit \
 		ControlIntentJournalTest.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
@@ -82,4 +89,4 @@ package-smoke: build agent-registration
 	./package-smoke.sh
 
 clean:
-	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest ControlIntentJournalTest
+	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest ControlIntentJournalTest WorkerSupervisorTest

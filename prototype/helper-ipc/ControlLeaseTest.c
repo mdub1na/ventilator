@@ -249,6 +249,18 @@ static void recovery_proof_requires_a_full_window_and_is_one_use(void) {
     assert(!control_lease_take_recovery_proof(&lease));
 }
 
+static void interrupted_recovery_never_creates_a_journal_proof(void) {
+    SmcBaselineSnapshot snapshot = system_snapshot();
+    ControlLease lease = {0};
+    control_lease_start(&lease, CONTROL_INTENT_PENDING, SMC_BASELINE_OK, &snapshot, SECOND);
+    control_lease_recovery_started(&lease, SMC_BASELINE_OK, &snapshot, 2 * SECOND);
+    control_lease_sample(&lease, SMC_BASELINE_OK, &snapshot, 8 * SECOND);
+    assert(lease.state == CONTROL_LEASE_READ_FAILED);
+    assert(!control_lease_take_recovery_proof(&lease));
+    finish_baseline_window(&lease, 8 * SECOND, &snapshot);
+    assert(lease.state == CONTROL_LEASE_READ_FAILED);
+}
+
 int main(void) {
     startup_requires_the_full_window_and_explicit_capability();
     changed_startup_never_grants_from_one_later_baseline();
@@ -259,6 +271,7 @@ int main(void) {
     restart_rechecks_hardware_instead_of_reusing_memory();
     missing_or_corrupt_intent_marker_ends_a_lease();
     recovery_proof_requires_a_full_window_and_is_one_use();
+    interrupted_recovery_never_creates_a_journal_proof();
     assert(strcmp(control_lease_state_name(CONTROL_LEASE_RECOVERY_REQUIRED),
                   "recovery_required") == 0);
     puts("control lease tests passed");

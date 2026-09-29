@@ -9,3 +9,6 @@
 /HelperWatchValidationTest
 /StartupAuditControllerTest
 /.reboot-probes/
+/WorkerSupervisorTest
+/ControlLeaseTest
+/ControlIntentJournalTest
