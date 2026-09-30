@@ -946,6 +946,56 @@ static void baseline_window_rejects_an_invalid_clock(void) {
     assert(fake.reads == 0);
 }
 
+static void external_recovery_releases_minimum_targets_without_claiming_a_minute(void) {
+    MockBackend mock = {.ftst = 1, .modes = {0, 0},
+                        .targets = {1350, 1458},
+                        .reclaim_only_with_zero_targets = true,
+                        .zero_targets_only_before_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_release_ftst_for_external_observation(&backend));
+    assert(strcmp(mock.writes, "T0=0;T1=0;Ftst=0;") == 0);
+    assert(mock.ftst == 0 && mock.modes[0] == 3 && mock.modes[1] == 3);
+    assert(mock.now < 60.0); // Only the separate observer may prove a minute.
+}
+
+static void external_recovery_waits_for_takeover_after_ftst_clear_without_writes(void) {
+    MockBackend mock = {.ftst = 0, .modes = {0, 0},
+                        .targets = {1350, 1458},
+                        .transient_mode_zero_after_ftst_release = true,
+                        .released_ftst = true, .mode_zero_reclaim_at = 3.0};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_release_ftst_for_external_observation(&backend));
+    assert(mock.write_count == 0);
+    assert(mock.now == 30.0);
+    // Firmware changing modes alone, while retaining minimum targets, is not
+    // enough to declare a baseline candidate.
+    mock.targets[0] = 0;
+    mock.targets[1] = 0;
+    assert(trial_release_ftst_for_external_observation(&backend));
+    assert(mock.now < 60.0);
+}
+
+static void external_recovery_initial_baseline_remains_only_a_candidate(void) {
+    MockBackend mock = {.modes = {3, 3}, .pending_ftst_enable = true,
+                        .ftst_enable_delay_seconds = 5.0};
+    TrialBackend backend = backend_for(&mock);
+    assert(trial_release_ftst_for_external_observation(&backend));
+    assert(mock.write_count == 0 && mock.now == 0.0);
+    assert(mock_wait(&mock, 5000));
+    TrialObservation delayed = {0};
+    assert(mock_read(&mock, false, &delayed));
+    assert(!trial_observation_is_baseline(&delayed));
+}
+
+static void external_recovery_failed_ftst_clear_never_returns_a_candidate(void) {
+    MockBackend mock = {.ftst = 1, .modes = {0, 0},
+                        .targets = {1350, 1458}, .fail_ftst_release = true};
+    TrialBackend backend = backend_for(&mock);
+    assert(!trial_release_ftst_for_external_observation(&backend));
+    assert(strstr(mock.writes, "Ftst=0;") != NULL);
+    assert(mock.ftst == 1);
+}
+
 int main(void) {
     direct_trial_success_requires_rpm_and_system_restore();
     direct_trial_restores_both_fans_after_partial_failure();
@@ -1007,6 +1057,10 @@ int main(void) {
     baseline_window_rejects_short_or_reversed_intervals();
     baseline_window_requires_elapsed_time_for_the_full_window();
     baseline_window_rejects_an_invalid_clock();
+    external_recovery_releases_minimum_targets_without_claiming_a_minute();
+    external_recovery_waits_for_takeover_after_ftst_clear_without_writes();
+    external_recovery_initial_baseline_remains_only_a_candidate();
+    external_recovery_failed_ftst_clear_never_returns_a_candidate();
     puts("trial action tests passed");
     return 0;
 }

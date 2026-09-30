@@ -70,6 +70,11 @@ TrialBaselineResult trial_observe_baseline_window(
 
 bool trial_restore_system(TrialBackend *backend);
 bool trial_restore_unlock(TrialBackend *backend);
+// Recovery-worker action only. A true result means a baseline candidate was
+// read, never that control was durably restored. The supervisor must run a
+// separate 61-sample / >=60-second observer before clearing its pending intent.
+// There is no CLI entry point or production SMC backend for this function.
+bool trial_release_ftst_for_external_observation(TrialBackend *backend);
 
 TrialRunStatus trial_check_ftst(TrialBackend *backend);
 
