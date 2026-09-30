@@ -139,6 +139,14 @@ date: 2026-09-23
 
 Подписанная root проба также прошла. После ручного переключения фона и системного подтверждения регистрация стала `enabled`; daemon `78446` с UID 0 принял доверенный клиент и отклонил чужие. Resume на чистом состоянии не запустил фаз. Runner `78630` завершился через `SIGKILL`, observer `78866` исчез; от маркера до закрытия stdout и сбора task прошло 3,089083 мс, `pending` сохранился, cleanup отказал. Новый root runner `78901` вернул `verified/resumed=true`, recovery `78912`, observer `78913`, `reaped=2`, 61 снимок за 62,988355125 с и чистый journal при нулевых admission/operation. Настоящие пути и отсутствие прежних процессов проверены через macOS kernel API. Свежий снимок остался системным, root состояние/служба/пакет удалены, все записанные PID отсутствовали, переключатель `off` подтверждён после повторного открытия настроек. [Фактический протокол](../features/helper-supervisor-probe.md#43-реальная-потеря-root-владельца-2026-09-29) фиксирует источник, бинарник и ограничения. Проверена смерть родителя в диагностическом observer; SMC записи, аппаратное восстановление и привязка будущего writer к жизни daemon/client ещё не проверены, оба пункта M2 открыты.
 
+### 1e. Связь runner с XPC владельцем — локальные read-only проверки
+
+Для следующей подписанной пробы код получил отдельную pipe от объекта принятого XPC соединения к root runner. Другие соединения могут читать статус, но закрывают только собственную pipe. Runner без grant либо после EOF не продолжает; его собственные worker завершаются при EOF отдельного socket. JNI держит то же соединение до терминального результата, сравнивает PID daemon/runner, а другой start получает `failed/busy`. Это механизм **read-only** прототипа: writer не линкуется.
+
+На `Mac15,7`/macOS 27.0 локальный процессный тест с подставным оборудованием подтвердил выход runner и worker менее чем за две секунды при закрытии upstream в четырёх фазах, а также при `SIGKILL` собственного тестового процесса daemon. После потери при операции/recovery/observer `pending` сохранился, cleanup отказал, recovery-only restart не повторил операцию. Анонимное локальное XPC соединение подтвердило, что invalidation чужого клиента оставляет канал владельца, а invalidation владельца закрывает его.
+
+Подписанная read-only root проба 2026-09-30 проверила полный Compose/JNI/XPC путь в **начальном окне**: daemon `11899` запустил UID 0 runner `14560`, чужая связь получила статус и `failed/busy` при попытке start. После `SIGKILL` точно своего JVM клиента тот же daemon сообщил `failed/owner_lost`, а kernel проверка подтвердила отсутствие runner. До и после пробы отдельные XPC снимки сохранили `Ftst=0`, режимы `[3,3]`, цели `[0,0]`; root состояние, служба и временный пакет удалены, фоновая активность вернулась в `off`. Источник и SHA-256 подписанного runner приведены в [протоколе §4.5](../features/helper-supervisor-probe.md#45-подписанная-потеря-xpc-клиента-2026-09-30). Во время системного разрешения новый CLI процесс временами показывал `notFound` при уже доступной подписанной службе; проверка использовала фиксированный XPC ответ и UID 0, затем отдельно подтвердила `notRegistered` и отсутствие службы после выключения фона. Это не проверка root `pending` после потери клиента или аппаратного восстановления; новый допуск записи не открыт.
+
 ## 2. Решения на текущем этапе
 
 
@@ -222,6 +230,7 @@ date: 2026-09-23
 | Независимый read-only наблюдатель состояния | `prototype/smc-write-trial/smc-write-trial.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Тесты preflight и восстановления | `prototype/smc-write-trial/trial_logic_test.c`, `prototype/smc-write-trial/trial_actions_test.c` |
 | Изолированная модель будущего срока владения helper | `prototype/helper-ipc/ControlLease.c`, `prototype/helper-ipc/ControlLeaseTest.c` |
+| Привязка root runner к принятому XPC соединению | `prototype/helper-ipc/SupervisorProbeOwner.m`, `prototype/helper-ipc/SupervisorRunnerLifetime.c`, `prototype/helper-ipc/SupervisorProbeOwnerTest.m` |
 | Изолированный устойчивый маркер намерения helper | `prototype/helper-ipc/ControlIntentJournal.c`, `prototype/helper-ipc/ControlIntentJournalTest.c` |
 | Нативный совмещённый значок | `prototype/menu-bar/StatusItem.swift` |
 | Интегрированный AppKit значок | `prototype/menu-bar/StatusItemBridge.swift`, `prototype/menu-bar/StatusArtwork.swift` |

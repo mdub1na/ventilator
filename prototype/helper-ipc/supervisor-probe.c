@@ -3,6 +3,7 @@
 #include "SupervisorProbeStorage.h"
 #include "SupervisorProbeDirectory.h"
 #include "SupervisorProbeCrash.h"
+#include "SupervisorRunnerLifetime.h"
 #include <errno.h>
 #include <fcntl.h>
 #include <stdio.h>
@@ -42,6 +43,11 @@ static void observer_started(void *context, pid_t observer, bool recovering) {
         (void)supervisor_probe_crash_after_observer_start(probe->directory, observer);
 }
 
+static void check_owner(void *context) {
+    (void)context;
+    supervisor_runner_lifetime_check(STDIN_FILENO);
+}
+
 static uint64_t window_ns(const ControlLease *lease) {
     return lease->last_sample_ns >= lease->observation_started_ns ?
         lease->last_sample_ns - lease->observation_started_ns : 0;
@@ -57,6 +63,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     umask(0077);
+    if (!supervisor_runner_lifetime_enter(STDIN_FILENO)) return 2;
     int directory = SupervisorProbeOpenDirectory();
     int lock = directory >= 0 ? supervisor_probe_lock(directory) : -1;
     if (lock < 0) {
@@ -65,6 +72,7 @@ int main(int argc, char **argv) {
         return 2;
     }
     if (cleanup) {
+        check_owner(NULL);
         bool clean = supervisor_probe_cleanup(directory);
         if (clean) clean = unlinkat(directory, "probe-launch-v1", 0) == 0 && rmdir(SupervisorProbeDirectoryPath) == 0;
         (void)close(lock);
@@ -75,7 +83,8 @@ int main(int argc, char **argv) {
 
     ProbeContext context = {.directory = directory};
     WorkerSupervisorBackend backend = {.context = &context, .operate = check_only, .recover = check_only,
-                                        .read = read_baseline, .observer_started = observer_started};
+                                        .read = read_baseline, .observer_started = observer_started,
+                                        .parent_check = check_owner};
     WorkerSupervisorLimits limits = {.operation_ns = 5 * SECOND, .recovery_ns = 5 * SECOND,
                                      .observation_ns = 75 * SECOND, .reap_ns = 2 * SECOND};
     ControlLease lease = {0};
@@ -103,6 +112,7 @@ int main(int argc, char **argv) {
         }
     }
     bool clear = control_intent_read(directory) == CONTROL_INTENT_CLEAR;
+    check_owner(NULL);
     const char *state = report.result == SUPERVISOR_RECOVERED && clear ? "verified" : clear ? "blocked" : "pending";
     unsigned recovery_samples = report.result == SUPERVISOR_RECOVERED ? lease.samples : 0;
     uint64_t recovery_duration = report.result == SUPERVISOR_RECOVERED ? window_ns(&lease) : 0;

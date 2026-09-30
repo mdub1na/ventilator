@@ -18,6 +18,7 @@ typedef enum { ProbeRun, ProbeCleanup, ProbeCrash, ProbeResume } SupervisorProbe
 @property(nonatomic, copy) NSDictionary *report;
 @property(nonatomic, copy) NSDictionary *crash;
 @property(nonatomic) pid_t runnerPID;
+@property(nonatomic, strong) SupervisorProbeOwner *owner;
 @end
 
 // Resolves only the sibling of this daemon, then pins Apple anchor, identifier
@@ -153,7 +154,16 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
 
 - (NSDictionary *)status { @synchronized (self) { return [self statusLocked]; } }
 
-- (NSDictionary *)launchLocked:(SupervisorProbeMode)mode {
+- (NSDictionary *)busyLocked {
+    NSMutableDictionary *result = [[self statusLocked] mutableCopy];
+    result[@"state"] = @"failed";
+    result[@"reason"] = @"busy";
+    [result removeObjectForKey:@"report"];
+    [result removeObjectForKey:@"crash"];
+    return result;
+}
+
+- (NSDictionary *)launchLocked:(SupervisorProbeMode)mode owner:(SupervisorProbeOwner *)owner {
     BOOL cleanup = mode == ProbeCleanup;
     _report = nil;
     _crash = nil;
@@ -161,6 +171,10 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
     _runnerPID = 0;
     if (getuid() != 0 || geteuid() != 0) {
         _state = @"failed"; _reason = @"permission";
+        return [self statusLocked];
+    }
+    if (!owner || owner.lost) {
+        _state = @"failed"; _reason = @"owner_lost";
         return [self statusLocked];
     }
     NSURL *runner = SupervisorProbeRunnerURL();
@@ -179,16 +193,27 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
     task.arguments = cleanup ? @[@"--cleanup"] : mode == ProbeCrash ? @[@"--crash-observer"] :
         mode == ProbeResume ? @[@"--resume-pending"] : @[];
     task.environment = @{};
-    task.standardInput = [NSFileHandle fileHandleWithNullDevice];
+    NSPipe *ownership = [owner openChannel];
+    if (!ownership) {
+        _state = @"failed"; _reason = @"owner_lost";
+        return [self statusLocked];
+    }
+    task.standardInput = ownership.fileHandleForReading;
     task.standardError = [NSFileHandle fileHandleWithNullDevice];
     NSPipe *output = [NSPipe pipe];
     task.standardOutput = output;
     NSError *error = nil;
     if (![task launchAndReturnError:&error]) {
+        [owner releaseChannel];
+        [ownership.fileHandleForReading closeFile];
         _state = @"failed"; _reason = @"launch";
         return [self statusLocked];
     }
+    // Only the stdin dup in the runner is needed. The writer stays in owner;
+    // CLOEXEC prevents it from leaking into runner or subsequent workers.
+    [ownership.fileHandleForReading closeFile];
     _task = task;
+    _owner = owner;
     _runnerPID = task.processIdentifier;
     _state = @"running";
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_UTILITY, 0), ^{
@@ -206,7 +231,11 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
         id result = !tooLarge ? [NSJSONSerialization JSONObjectWithData:data options:0 error:nil] : nil;
         @synchronized (self) {
             self.task = nil;
-            if (tooLarge) { self.state = @"failed"; self.reason = @"output"; }
+            BOOL lost = self.owner.lost;
+            [self.owner releaseChannel];
+            self.owner = nil;
+            if (lost) { self.state = @"failed"; self.reason = @"owner_lost"; }
+            else if (tooLarge) { self.state = @"failed"; self.reason = @"output"; }
             else if (mode == ProbeCrash && task.terminationReason == NSTaskTerminationReasonUncaughtSignal &&
                      task.terminationStatus == SIGKILL &&
                      HelperSupervisorCrashMarkerValid(result, self.runnerPID, finished)) {
@@ -226,31 +255,35 @@ BOOL SupervisorProbeCopySignatureCheck(void) {
     return [self statusLocked];
 }
 
-- (NSDictionary *)start {
+- (NSDictionary *)startForOwner:(SupervisorProbeOwner *)owner {
     @synchronized (self) {
+        if (_task && _owner != owner) return [self busyLocked];
         if (![_state isEqual:@"idle"] && ![_state isEqual:@"cleaned"]) return [self statusLocked];
-        return [self launchLocked:ProbeRun];
+        return [self launchLocked:ProbeRun owner:owner];
     }
 }
 
-- (NSDictionary *)startCrash {
+- (NSDictionary *)startCrashForOwner:(SupervisorProbeOwner *)owner {
     @synchronized (self) {
+        if (_task && _owner != owner) return [self busyLocked];
         if (![_state isEqual:@"idle"] && ![_state isEqual:@"cleaned"]) return [self statusLocked];
-        return [self launchLocked:ProbeCrash];
+        return [self launchLocked:ProbeCrash owner:owner];
     }
 }
 
-- (NSDictionary *)resume {
+- (NSDictionary *)resumeForOwner:(SupervisorProbeOwner *)owner {
     @synchronized (self) {
+        if (_task && _owner != owner) return [self busyLocked];
         if (_task) return [self statusLocked];
-        return [self launchLocked:ProbeResume];
+        return [self launchLocked:ProbeResume owner:owner];
     }
 }
 
-- (NSDictionary *)cleanup {
+- (NSDictionary *)cleanupForOwner:(SupervisorProbeOwner *)owner {
     @synchronized (self) {
+        if (_task && _owner != owner) return [self busyLocked];
         if (_task) return [self statusLocked];
-        return [self launchLocked:ProbeCleanup];
+        return [self launchLocked:ProbeCleanup owner:owner];
     }
 }
 @end

@@ -93,6 +93,24 @@ static void resume_requires_a_new_minute_and_no_repeated_operation(void) {
     NSCAssert(!HelperSupervisorReportValid(report), @"resume needs its own full minute");
 }
 
+static void reconnect_or_different_run_is_not_a_terminal_result(void) {
+    NSMutableDictionary *started = [@{@"protocol_version": @(HelperStatusProtocolVersion),
+        @"backend": @"read_only", @"write_available": @NO, @"daemon_pid": @99,
+        @"runner_pid": @100, @"state": @"running"} mutableCopy];
+    NSMutableDictionary *finished = [started mutableCopy];
+    finished[@"state"] = @"finished"; finished[@"report"] = verifiedReport();
+    NSCAssert(HelperSupervisorSameRunValid(started, finished), @"same live run result");
+    finished[@"daemon_pid"] = @98;
+    NSCAssert(!HelperSupervisorSameRunValid(started, finished), @"new daemon cannot reuse old request");
+    finished[@"daemon_pid"] = @99;
+    NSMutableDictionary *other = [started mutableCopy]; other[@"runner_pid"] = @200;
+    NSCAssert(!HelperSupervisorSameRunValid(started, other), @"different runner");
+    other = [started mutableCopy]; other[@"state"] = @"failed"; other[@"reason"] = @"owner_lost";
+    NSCAssert(HelperSupervisorSameRunValid(started, other), @"owner loss is a failure status");
+    other[@"report"] = verifiedReport();
+    NSCAssert(!HelperSupervisorSameRunValid(started, other), @"lost owner cannot carry proof");
+}
+
 int main(void) {
     @autoreleasepool {
         NSCAssert(HelperSupervisorReportValid(verifiedReport()), @"valid pair of minutes must pass");
@@ -100,6 +118,7 @@ int main(void) {
         xpc_write_or_mismatched_runner_is_rejected();
         interrupted_requires_bounded_root_evidence();
         resume_requires_a_new_minute_and_no_repeated_operation();
+        reconnect_or_different_run_is_not_a_terminal_result();
         puts("read-only supervisor contract tests passed");
     }
 }

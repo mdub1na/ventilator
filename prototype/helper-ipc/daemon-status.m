@@ -8,6 +8,7 @@
 #include <time.h>
 
 @interface DaemonStatus : NSObject <HelperStatusXPC>
+@property(nonatomic, strong) SupervisorProbeOwner *owner;
 @end
 
 @implementation DaemonStatus
@@ -63,19 +64,19 @@
     reply([[BaselineWatchController shared] status]);
 }
 - (void)startSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
-    reply([[SupervisorProbeController shared] start]);
+    reply([[SupervisorProbeController shared] startForOwner:self.owner]);
 }
 - (void)startSupervisorCrashProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
-    reply([[SupervisorProbeController shared] startCrash]);
+    reply([[SupervisorProbeController shared] startCrashForOwner:self.owner]);
 }
 - (void)resumeSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
-    reply([[SupervisorProbeController shared] resume]);
+    reply([[SupervisorProbeController shared] resumeForOwner:self.owner]);
 }
 - (void)fetchSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
     reply([[SupervisorProbeController shared] status]);
 }
 - (void)cleanupSupervisorProbeWithReply:(void (^)(NSDictionary<NSString *, id> *))reply {
-    reply([[SupervisorProbeController shared] cleanup]);
+    reply([[SupervisorProbeController shared] cleanupForOwner:self.owner]);
 }
 @end
 
@@ -94,17 +95,20 @@
     (void)listener;
     NSLog(@"accepted signed XPC connection");
     connection.exportedInterface = [NSXPCInterface interfaceWithProtocol:@protocol(HelperStatusXPC)];
-    connection.exportedObject = [DaemonStatus new];
+    SupervisorProbeOwner *owner = [SupervisorProbeOwner new];
+    DaemonStatus *status = [DaemonStatus new];
+    status.owner = owner;
+    connection.exportedObject = status;
     __weak DaemonListener *weakSelf = self;
     __weak NSXPCConnection *weakConnection = connection;
-    connection.invalidationHandler = ^{
+    [owner attachToConnection:connection onInvalidation:^{
         NSXPCConnection *invalidated = weakConnection;
         if (invalidated) {
             @synchronized (weakSelf) {
                 [weakSelf.connections removeObject:invalidated];
             }
         }
-    };
+    }];
     @synchronized (self) {
         [self.connections addObject:connection];
     }
