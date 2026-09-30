@@ -45,6 +45,24 @@ running_root_pid() {
     printf '%s\n' "$pid"
 }
 
+require_live_readonly_service() {
+    registration=$(ventilator --helper-registration-status)
+    [ "$registration" = enabled ] && return 0
+    [ "$registration" = notFound ] || {
+        echo "daemon is not enabled: $registration" >&2
+        return 1
+    }
+    # After a Login Items approval, a new app process can report notFound
+    # while the approved system job already answers signed XPC.
+    reply=$(ventilator --helper-request) || return 1
+    case "$reply" in
+        *'"smc_access":true'*'"state":"read_only_prototype"'*'"write_available":false'*) ;;
+        *) echo "live daemon did not confirm read-only status: $reply" >&2; return 1 ;;
+    esac
+    running_root_pid >/dev/null || { echo "live daemon is not UID 0" >&2; return 1; }
+    echo "registration=$registration; live-read-only-daemon=verified" >&2
+}
+
 sleep_wakes() {
     pmset -g log | sed -n 's/^Total Sleep\/Wakes since boot .* :\([0-9][0-9]*\)$/\1/p' | tail -n 1
 }
@@ -324,15 +342,15 @@ PY
         ;;
     supervisor-client-loss-run)
         require_app "$@"
-        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        require_live_readonly_service
         [ ! -e /private/var/db/com.ventilator.supervisor-read-only ] || {
             echo "client loss requires absent prior probe state" >&2; exit 1;
         }
         make helper-status
         owner_log=$(mktemp "${TMPDIR:-/tmp}/ventilator-owned-client.XXXXXX")
-        ventilator --helper-supervisor-start >"$owner_log" 2>&1 &
+        "$app/Contents/MacOS/Ventilator" --helper-supervisor-start >"$owner_log" 2>&1 &
         owned_client_pid=$!
-        trap 'kill -TERM "$owned_client_pid" 2>/dev/null || true' EXIT
+        trap 'kill -KILL "$owned_client_pid" 2>/dev/null || true' EXIT
         attempt=0
         initial=
         while [ "$attempt" -lt 50 ]; do
@@ -361,16 +379,17 @@ assert b['daemon_pid'] == a['daemon_pid'] and b['runner_pid'] == a['runner_pid']
 PY
         echo "other-connection=busy ownership-not-transferred"
         owned_runner=$(printf '%s\n' "$initial" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
-        kill -TERM "$owned_client_pid"
+        kill -KILL "$owned_client_pid"
         wait "$owned_client_pid" 2>/dev/null || true
         trap - EXIT
         attempt=0
-        while [ "$attempt" -lt 40 ]; do
+        while [ "$attempt" -lt 100 ]; do
             status=$(ventilator --helper-supervisor-status)
             case "$status" in *'"reason":"owner_lost"'*'"state":"failed"'*) break ;; esac
             attempt=$((attempt + 1))
             sleep 0.1
         done
+        echo "client-loss-final=$status"
         python3 -I - "$initial" "$status" <<'PY'
 import json, sys
 a, b = map(json.loads, sys.argv[1:])
