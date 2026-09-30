@@ -420,12 +420,13 @@ PY
             echo "pending client loss requires absent prior probe state" >&2; exit 1;
         }
         baseline=$(ventilator --helper-baseline)
-        python3 -I - "$baseline" <<'PY'
+        readonly_status=$(ventilator --helper-request)
+        python3 -I - "$baseline" "$readonly_status" <<'PY'
 import json, sys
 b = json.loads(sys.argv[1])
 assert b['available'] is True and b['baseline'] is True
 assert b['Ftst'] == 0 and b['mode'] == [3, 3] and b['target_rpm'] == [0, 0]
-assert b['write_available'] is False
+assert json.loads(sys.argv[2])['write_available'] is False
 PY
         echo "pending-client-baseline-before=$baseline"
         make helper-status
@@ -507,12 +508,13 @@ assert len({r['runner_pid'], r['recovery_pid'], r['observer_pid']}) == 3
 PY
         echo "pending-client-loss=recovered operation-repeated=false journal-clear=true"
         baseline=$(ventilator --helper-baseline)
-        python3 -I - "$baseline" <<'PY'
+        readonly_status=$(ventilator --helper-request)
+        python3 -I - "$baseline" "$readonly_status" <<'PY'
 import json, sys
 b = json.loads(sys.argv[1])
 assert b['available'] is True and b['baseline'] is True
 assert b['Ftst'] == 0 and b['mode'] == [3, 3] and b['target_rpm'] == [0, 0]
-assert b['write_available'] is False
+assert json.loads(sys.argv[2])['write_available'] is False
 PY
         echo "pending-client-baseline-after=$baseline"
         rm "$owner_log"
