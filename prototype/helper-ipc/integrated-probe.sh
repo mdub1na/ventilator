@@ -5,7 +5,7 @@ service=com.ventilator.helper-ipc.read-only
 plist=com.ventilator.helper-ipc.read-only.plist
 
 usage() {
-    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-crash-start APP | supervisor-resume APP | supervisor-crash-run APP | supervisor-client-loss-run APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
+    echo "Usage: $0 prepare | prepare-reboot | status APP | register APP | eager-check APP | check APP | supervisor-start APP | supervisor-crash-start APP | supervisor-resume APP | supervisor-crash-run APP | supervisor-client-loss-run APP | supervisor-client-pending-loss-run APP | supervisor-status APP | supervisor-cleanup APP | startup-audit-crash-run APP | reboot-before APP | reboot-after APP | watch APP | watch-crash-run APP | watch-crash-before APP | watch-crash-after APP | ui-crash APP | restart-before APP | restart-after APP | sleep-before APP | sleep-after APP | unregister APP | cleanup APP" >&2
     exit 2
 }
 
@@ -95,6 +95,18 @@ supervisor_identity() {
         echo "runner path differs or is unavailable" >&2; return 1;
     }
     echo "supervisor-process=verified uid=0 pid=$pid"
+}
+
+owned_client_identity() {
+    [ "$(ps -p "$owned_client_pid" -o ppid= | tr -d ' ')" = "$$" ] &&
+        [ "$(./helper-status process-path "$owned_client_pid")" = "$client_executable" ]
+}
+
+stop_owned_client() {
+    if owned_client_identity; then
+        kill -KILL "$owned_client_pid" 2>/dev/null || true
+        wait "$owned_client_pid" 2>/dev/null || true
+    fi
 }
 
 valid_identity() {
@@ -248,7 +260,7 @@ case "$action" in
     supervisor-start|supervisor-crash-start|supervisor-resume)
         require_app "$@"
         make helper-status
-        [ "$(ventilator --helper-registration-status)" = enabled ] || { echo "daemon is not enabled" >&2; exit 1; }
+        require_live_readonly_service
         case "$action" in
             supervisor-start) command=--helper-supervisor-start ;;
             supervisor-crash-start) command=--helper-supervisor-crash-start ;;
@@ -399,6 +411,112 @@ assert b['write_available'] is False
 PY
         ./helper-status process-absent "$owned_runner"
         echo "client-loss=runner-exited owner-lost=true"
+        rm "$owner_log"
+        ;;
+    supervisor-client-pending-loss-run)
+        require_app "$@"
+        require_live_readonly_service
+        [ ! -e /private/var/db/com.ventilator.supervisor-read-only ] || {
+            echo "pending client loss requires absent prior probe state" >&2; exit 1;
+        }
+        baseline=$(ventilator --helper-baseline)
+        readonly_status=$(ventilator --helper-request)
+        python3 -I - "$baseline" "$readonly_status" <<'PY'
+import json, sys
+b = json.loads(sys.argv[1])
+assert b['available'] is True and b['baseline'] is True
+assert b['Ftst'] == 0 and b['mode'] == [3, 3] and b['target_rpm'] == [0, 0]
+assert json.loads(sys.argv[2])['write_available'] is False
+PY
+        echo "pending-client-baseline-before=$baseline"
+        make helper-status
+        client_executable=$(realpath "$app/Contents/MacOS/Ventilator")
+        owner_log=$(mktemp "${TMPDIR:-/tmp}/ventilator-pending-client.XXXXXX")
+        "$app/Contents/MacOS/Ventilator" --helper-supervisor-start >"$owner_log" 2>&1 &
+        owned_client_pid=$!
+        trap 'stop_owned_client' EXIT
+        attempt=0
+        initial=
+        while [ "$attempt" -lt 50 ]; do
+            initial=$(head -n 1 "$owner_log")
+            [ -z "$initial" ] || break
+            owned_client_identity || break
+            attempt=$((attempt + 1))
+            sleep 0.2
+        done
+        case "$initial" in *'"state":"running"'*) ;; *) echo "owned client did not start: $owner_log" >&2; exit 1 ;; esac
+        owned_client_identity || { echo "owned client identity changed: $owner_log" >&2; exit 1; }
+        supervisor_identity "$initial"
+        old_runner=$(printf '%s\n' "$initial" | sed -n 's/.*"runner_pid":\([0-9][0-9]*\).*/\1/p')
+        # The first baseline takes at least 60 seconds; an ordinary complete
+        # run takes another minute. Terminal evidence below, not this delay,
+        # proves that the pending journal existed before client termination.
+        attempt=0
+        while [ "$attempt" -lt 16 ]; do
+            sleep 5
+            owned_client_identity || { echo "owned client ended before the pending check: $owner_log" >&2; exit 1; }
+            status=$(ventilator --helper-supervisor-status)
+            python3 -I - "$initial" "$status" <<'PY'
+import json, sys
+a, b = map(json.loads, sys.argv[1:])
+assert b['state'] == 'running' and b['daemon_pid'] == a['daemon_pid']
+assert b['runner_pid'] == a['runner_pid'] and b['write_available'] is False
+PY
+            attempt=$((attempt + 1))
+        done
+        echo "pending-client=running-after-80-seconds daemon-and-runner-unchanged"
+        owned_client_identity || { echo "owned client identity changed before termination" >&2; exit 1; }
+        kill -KILL "$owned_client_pid"
+        wait "$owned_client_pid" 2>/dev/null || true
+        trap - EXIT
+        attempt=0
+        while [ "$attempt" -lt 100 ]; do
+            status=$(ventilator --helper-supervisor-status)
+            case "$status" in *'"reason":"owner_lost"'*'"state":"failed"'*) break ;; esac
+            attempt=$((attempt + 1))
+            sleep 0.1
+        done
+        echo "pending-client-loss=$status"
+        python3 -I - "$initial" "$status" <<'PY'
+import json, sys
+a, b = map(json.loads, sys.argv[1:])
+assert b['state'] == 'failed' and b['reason'] == 'owner_lost'
+assert b['daemon_pid'] == a['daemon_pid'] and b['runner_pid'] == a['runner_pid']
+assert b['write_available'] is False
+PY
+        ./helper-status process-absent "$old_runner"
+        echo "old-runner=absent pid=$old_runner"
+        status=$(ventilator --helper-supervisor-cleanup)
+        supervisor_terminal
+        echo "pending-cleanup=$status"
+        case "$status" in *'"reason":"exit"'*'"state":"failed"'*) ;; *) echo "cleanup did not refuse; pending was not proved" >&2; exit 1 ;; esac
+        [ -d /private/var/db/com.ventilator.supervisor-read-only ] || { echo "pending state disappeared" >&2; exit 1; }
+        "$0" supervisor-resume "$app"
+        supervisor_terminal
+        echo "pending-client-recovery=$status"
+        python3 -I - "$status" "$old_runner" <<'PY'
+import json, sys
+s = json.loads(sys.argv[1]); r = s.get('report', {})
+assert s['state'] == 'finished' and r['state'] == 'verified' and r['resumed'] is True
+assert s['write_available'] is False and r['journal_clear'] is True
+assert r['runner_uid'] == 0 and r['reaped'] == 2
+assert r['admission_pid'] == r['operation_pid'] == 0
+assert r['admission_samples'] == r['admission_duration_ns'] == 0
+assert r['recovery_samples'] == 61 and r['recovery_duration_ns'] >= 60_000_000_000
+assert r['runner_pid'] != int(sys.argv[2])
+assert len({r['runner_pid'], r['recovery_pid'], r['observer_pid']}) == 3
+PY
+        echo "pending-client-loss=recovered operation-repeated=false journal-clear=true"
+        baseline=$(ventilator --helper-baseline)
+        readonly_status=$(ventilator --helper-request)
+        python3 -I - "$baseline" "$readonly_status" <<'PY'
+import json, sys
+b = json.loads(sys.argv[1])
+assert b['available'] is True and b['baseline'] is True
+assert b['Ftst'] == 0 and b['mode'] == [3, 3] and b['target_rpm'] == [0, 0]
+assert json.loads(sys.argv[2])['write_available'] is False
+PY
+        echo "pending-client-baseline-after=$baseline"
         rm "$owner_log"
         ;;
     supervisor-status)
