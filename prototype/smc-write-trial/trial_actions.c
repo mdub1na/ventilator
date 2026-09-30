@@ -14,6 +14,7 @@ enum {
     FTST_BASELINE_WAIT_SECONDS = 90,
     FTST_BASELINE_STABLE_SECONDS = 60,
     FTST_EFFECT_WAIT_HALF_SECONDS = 20,
+    EXTERNAL_BASELINE_WAIT_SECONDS = 30,
 };
 
 static bool retry_mode(TrialBackend *backend, unsigned fan, uint8_t mode) {
@@ -181,7 +182,27 @@ bool trial_restore_system(TrialBackend *backend) {
 
 static TrialBaselineResult trial_observe_after_ftst(TrialBackend *backend);
 
-bool trial_restore_unlock(TrialBackend *backend) {
+static bool wait_for_external_candidate(TrialBackend *backend) {
+    // Once Ftst is clear, the tested machine may reclaim both fans without
+    // another write. Do not send zero targets to a fan that firmware may have
+    // already taken over; a persistent released state remains unverified.
+    for (unsigned second = 0; second <= EXTERNAL_BASELINE_WAIT_SECONDS; ++second) {
+        TrialObservation observation = {0};
+        if (backend->should_stop(backend->context) ||
+            !backend->read_observation(backend->context, false, &observation) ||
+            observation.ftst != 0 || !modes_released(&observation)) return false;
+        note_fan_state(backend, &observation);
+        if (backend->record_observation != NULL) {
+            backend->record_observation(backend->context, second, &observation);
+        }
+        if (trial_observation_is_baseline(&observation)) return true;
+        if (second < EXTERNAL_BASELINE_WAIT_SECONDS &&
+            !backend->wait_milliseconds(backend->context, 1000)) return false;
+    }
+    return false;
+}
+
+static bool restore_unlock(TrialBackend *backend, bool external_observation) {
     if (backend == NULL || backend->write_ftst == NULL ||
         backend->write_mode == NULL || backend->write_target == NULL ||
         backend->read_observation == NULL || backend->wait_milliseconds == NULL ||
@@ -205,6 +226,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
     }
     bool delayed_change = false;
     if (trial_observation_is_baseline(&current)) {
+        // The external observer owns the complete proof window. A candidate
+        // read here cannot clear the supervisor's persistent intent.
+        if (external_observation) return true;
         // Ftst can change after an apparently restored first read. Observe
         // before declaring success; recover if the delayed effect appears.
         TrialBaselineResult result = trial_observe_after_ftst(backend);
@@ -215,8 +239,9 @@ bool trial_restore_unlock(TrialBackend *backend) {
         delayed_change = true;
     }
     if (current.ftst == 0) {
-        return trial_restore_system(backend) &&
-               trial_observe_after_ftst(backend).status == TRIAL_BASELINE_STABLE &&
+        if (external_observation) return wait_for_external_candidate(backend);
+        if (!trial_restore_system(backend)) return false;
+        return trial_observe_after_ftst(backend).status == TRIAL_BASELINE_STABLE &&
                !delayed_change;
     }
     if (current.ftst != 1) return false;
@@ -282,6 +307,11 @@ bool trial_restore_unlock(TrialBackend *backend) {
     }
     if (!ftst_cleared) return false;
 
+    if (external_observation) {
+        // The independent observer, not this worker, owns the full minute.
+        return wait_for_external_candidate(backend);
+    }
+
     // A single baseline read after an accepted Ftst write was misleading on
     // Mac15,7. Require an uninterrupted minute, allowing 30 s for takeover.
     unsigned stable_samples = 0;
@@ -325,6 +355,14 @@ bool trial_restore_unlock(TrialBackend *backend) {
             !backend->wait_milliseconds(backend->context, 1000)) return false;
     }
     return false;
+}
+
+bool trial_restore_unlock(TrialBackend *backend) {
+    return restore_unlock(backend, false);
+}
+
+bool trial_release_ftst_for_external_observation(TrialBackend *backend) {
+    return restore_unlock(backend, true);
 }
 
 typedef struct {

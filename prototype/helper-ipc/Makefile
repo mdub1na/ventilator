@@ -2,7 +2,7 @@ CC ?= clang
 CFLAGS = -fobjc-arc -Wall -Wextra -Werror -O2
 JDK_HOME = $(shell /usr/libexec/java_home -v 25)
 
-.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test worker-supervisor-test supervisor-probe-test
+.PHONY: build clean smoke package-smoke daemon-prepare baseline-read-test baseline-contract-test baseline-watch-test watch-contract-test startup-audit-test control-lease-test control-intent-test worker-supervisor-test supervised-ftst-contract-test supervisor-probe-test
 
 build: helper-status
 
@@ -76,6 +76,13 @@ control-intent-test: ControlIntentJournalTest
 worker-supervisor-test: WorkerSupervisorTest
 	./WorkerSupervisorTest
 
+supervised-ftst-contract-test: SupervisedFtstContractTest
+	./SupervisedFtstContractTest
+
+SupervisedFtstContractTest: SupervisedFtstContractTest.c WorkerSupervisor.c WorkerSupervisor.h SupervisorRunnerLifetime.c SupervisorRunnerLifetime.h SupervisorProbeCrash.c SupervisorProbeCrash.h SupervisorProbeStorage.c SupervisorProbeStorage.h SupervisorOwnership.c SupervisorOwnership.h ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h ../smc-write-trial/trial_actions.c ../smc-write-trial/trial_actions.h ../smc-write-trial/trial_logic.c ../smc-write-trial/trial_logic.h
+	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -pthread -framework IOKit \
+		SupervisedFtstContractTest.c WorkerSupervisor.c SupervisorRunnerLifetime.c SupervisorProbeCrash.c SupervisorProbeStorage.c SupervisorOwnership.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c ../smc-write-trial/trial_actions.c ../smc-write-trial/trial_logic.c -o $@
+
 WorkerSupervisorTest: WorkerSupervisorTest.c WorkerSupervisor.c WorkerSupervisor.h SupervisorRunnerLifetime.c SupervisorRunnerLifetime.h SupervisorProbeCrash.c SupervisorProbeCrash.h SupervisorProbeStorage.c SupervisorProbeStorage.h SupervisorOwnership.c SupervisorOwnership.h ControlIntentJournal.c ControlIntentJournal.h ControlLease.c ControlLease.h SmcBaselineRead.c SmcBaselineRead.h
 	$(CC) -std=c11 -Wall -Wextra -Werror -O2 -pthread -framework IOKit \
 		WorkerSupervisorTest.c WorkerSupervisor.c SupervisorRunnerLifetime.c SupervisorProbeCrash.c SupervisorProbeStorage.c SupervisorOwnership.c ControlIntentJournal.c ControlLease.c SmcBaselineRead.c -o $@
@@ -114,4 +121,4 @@ package-smoke: build agent-registration
 	./package-smoke.sh
 
 clean:
-	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest ControlIntentJournalTest WorkerSupervisorTest supervisor-probe HelperSupervisorValidationTest SupervisorProbeStorageTest SupervisorProbeOwnerTest
+	rm -f helper-status agent-registration daemon-status daemon-registration libhelper-probe.dylib SmcBaselineReadTest HelperBaselineValidationTest BaselineWatchTest HelperWatchValidationTest StartupAuditControllerTest ControlLeaseTest ControlIntentJournalTest WorkerSupervisorTest SupervisedFtstContractTest supervisor-probe HelperSupervisorValidationTest SupervisorProbeStorageTest SupervisorProbeOwnerTest

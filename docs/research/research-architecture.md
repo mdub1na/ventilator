@@ -149,6 +149,10 @@ date: 2026-09-23
 
 Следующая подписанная read-only root проба на том же `Mac15,7`/macOS 27.0 проверила гибель XPC клиента **после устойчивого `pending`**: daemon `37373` сообщил `failed/owner_lost`, прежний UID 0 runner `37810` исчез, cleanup отказал и сохранил root состояние. Новый UID 0 runner `38193` выполнил только recovery (`38195`) и observer (`38196`): `verified/resumed=true`, нулевые admission/operation, `reaped=2`, 61 снимок за 62,9490665 с, чистый журнал. Свежие SMC снимки до/после сохранили `Ftst=0`, режимы `[3,3]`, цели `[0,0]`. Root состояние, все записанные PID, служба и временный пакет удалены; фоновый переключатель вернулся в `off` и оставался таким после повторного открытия настроек. [Протокол §4.6](../features/helper-supervisor-probe.md#46-подписанная-потеря-клиента-после-read-only-pending-2026-09-30) фиксирует источник, подпись и ограничения. Записи в SMC не было: аппаратный возврат после неё и M2-01/M2-02 остаются открытыми.
 
+### 1f. Граница ограниченного восстановления — подставной SMC
+
+`trial_restore_unlock` в изолированной CLI утилите включает внутреннее минутное подтверждение и может ждать исходного состояния до 90 секунд; это не укладывается как callback в отдельный 90-секундный срок восстановления supervisor. Новая форма `trial_release_ftst_for_external_observation` ограничивается шагами освобождения и ожиданием исходного **кандидата** до 30 секунд после очистки `Ftst`; если `Ftst` уже равен нулю, она ждёт автоматического возврата без новых записей. Для неё нет CLI команды или production writer. В отдельном тестовом бинарнике имитированное принятое `Ftst=1` с `[0,0]` и минимальными целями проходит через настоящий порядок процессов `WorkerSupervisor`; журнал очищается только после новой реальной минуты observer. Отказ очистки или поздний повторный эффект оставляет `pending`. Источник — [сценарии с подставным состоянием](../features/worker-supervisor.md); аппаратная запись и возврат из изменённого состояния **не проверялись**.
+
 ## 2. Решения на текущем этапе
 
 
@@ -231,6 +235,7 @@ date: 2026-09-23
 | Ограниченный direct-only writer M2-01 | `prototype/smc-write-trial/smc-write-trial.c`, `prototype/smc-write-trial/trial_logic.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Независимый read-only наблюдатель состояния | `prototype/smc-write-trial/smc-write-trial.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Тесты preflight и восстановления | `prototype/smc-write-trial/trial_logic_test.c`, `prototype/smc-write-trial/trial_actions_test.c` |
+| Подставной контракт восстановления через supervisor | `prototype/helper-ipc/SupervisedFtstContractTest.c`, `prototype/smc-write-trial/trial_actions.c` |
 | Изолированная модель будущего срока владения helper | `prototype/helper-ipc/ControlLease.c`, `prototype/helper-ipc/ControlLeaseTest.c` |
 | Привязка root runner к принятому XPC соединению | `prototype/helper-ipc/SupervisorProbeOwner.m`, `prototype/helper-ipc/SupervisorRunnerLifetime.c`, `prototype/helper-ipc/SupervisorProbeOwnerTest.m` |
 | Изолированный устойчивый маркер намерения helper | `prototype/helper-ipc/ControlIntentJournal.c`, `prototype/helper-ipc/ControlIntentJournalTest.c` |
