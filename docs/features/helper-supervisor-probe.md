@@ -112,7 +112,13 @@ tags: [macos, smc, fan-control, safety]
 * **When:** чужое соединение завершается, затем владелец disconnect или его процесс гибнет.
 * **Then:** первый раз канал runner остаётся открыт; при потере владельца runner и worker завершаются, а `pending`, если был, не удаляется. Старый XPC канал не может вновь стать владельцем.
 * **Automated:** `prototype/helper-ipc/SupervisorProbeOwnerTest.m::xpc_invalidation_only_releases_its_own_connection`, `prototype/helper-ipc/WorkerSupervisorTest.c::upstream_loss_stops_runner_and_each_worker_phase`
-* **Manual:** `prototype/helper-ipc/integrated-probe.sh supervisor-client-loss-run "$APP"` проверяет начальное окно на подписанном root пути; остальные фазы покрывает процессный тест с подставным оборудованием.
+* **Manual:** `prototype/helper-ipc/integrated-probe.sh supervisor-client-loss-run "$APP"` проверяет начальное окно на подписанном root пути; `supervisor-client-pending-loss-run` проверяет отдельный случай с подтверждённым сохранением `pending` после потери клиента. Остальные фазы покрывает процессный тест с подставным оборудованием.
+
+### Scenario: Потеря подписанного клиента после `pending` требует recovery-only restart
+* **Given:** временный подписанный read-only daemon UID 0, системный SMC снимок и отсутствующее прежнее root состояние.
+* **When:** диагностический JVM клиент запускает обычный supervisor, остаётся живым после начальной минуты и завершается только как собственный проверенный процесс; затем другой клиент запрашивает cleanup и явный resume.
+* **Then:** прежний runner исчезает, daemon возвращает `failed/owner_lost`, cleanup отказывает при сохранённом состоянии; новый UID 0 runner возвращает `verified/resumed=true`, нулевые admission/operation, два новых собранных процесса, 61 снимок за минимум минуту и очищенный journal. Если `pending` не доказан, сценарий не засчитывается.
+* **Manual:** `prototype/helper-ipc/integrated-probe.sh supervisor-client-pending-loss-run "$APP"` на `Mac15,7`/macOS 27.0. До аппаратного исполнения это только подготовленный протокол.
 
 ### Scenario: Гибель daemon завершает runner и не создаёт ложный proof
 * **Given:** только отдельный тестовый процесс daemon держит upstream pipe runner, операция уже запустилась и `pending` сохранён.
